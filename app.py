@@ -98,6 +98,49 @@ if st.button("▶️ Start Market Scan"):
                 chart_data, type='candle', style='charles', 
                 mav=(20, 50, 200), volume=True, returnfig=True,
                 figratio=(12, 6), title=f"{selected_stock} Trend Analysis"
+                # ... [Keep your imports and session setup from the previous app code] ...
+
+@st.cache_data(ttl=3600)
+def run_swing_screener(limit):
+    # ... [Keep the symbol loading logic] ...
+    
+    for i, ticker in enumerate(symbols[:limit]):
+        try:
+            # We fetch 2 years to get a solid 200MA and 52W High/Low context
+            df = yf.download(ticker, period="2y", interval="1d", progress=False)
+            if df.empty or len(df) < 200: continue
+            if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+
+            cp = float(df['Close'].iloc[-1])
+            ma20, ma50, ma200 = df['Close'].rolling(20).mean().iloc[-1], df['Close'].rolling(50).mean().iloc[-1], df['Close'].rolling(200).mean().iloc[-1]
+            
+            # --- VOLATILITY PARAMETERS ---
+            daily_returns = df['Close'].pct_change().dropna()
+            vol_d = daily_returns.std()
+            vol_y = vol_d * np.sqrt(252) # Annualized Volatility
+
+            # --- SWING SIGNAL LOGIC ---
+            signal = "Neutral"
+            if cp > ma20 > ma50 > ma200:
+                # If price is within 2% of the 20MA or 50MA, it's a "Pullback Buy" (High Quality Swing)
+                proximity_20 = abs(cp - ma20) / ma20
+                signal = "Strong Buy (Pullback)" if proximity_20 < 0.02 else "Strong Buy (Extended)"
+            
+            elif cp < ma20 < ma50 < ma200:
+                signal = "Strong Sell"
+
+            if signal != "Neutral":
+                results.append({
+                    "Ticker": ticker,
+                    "Signal": signal,
+                    "Price": round(cp, 2),
+                    "52W High": round(df['High'].max(), 2),
+                    "52W Low": round(df['Low'].min(), 2),
+                    "Vol (Yearly)": f"{vol_y:.2%}",
+                    "Dist from 52W High": f"{((df['High'].max() - cp) / df['High'].max()):.2%}",
+                    "MA 50 Support": round(ma50, 2)
+                })
+            # ... [Rest of the loop] ...
             )
             st.pyplot(fig)
     else:
