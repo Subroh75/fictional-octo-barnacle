@@ -4,3 +4,4 @@ curl_cffi
 mplfinance
 pandas
 numpy
+plotly
