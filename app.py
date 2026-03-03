@@ -6,7 +6,7 @@ import mplfinance as mpf
 import plotly.express as px
 import time
 
-# 1. PAGE SETUP (Must be the first Streamlit command)
+# 1. PAGE SETUP
 st.set_page_config(page_title="Nifty 500 Alpha Ignition", layout="wide")
 
 # 2. SIDEBAR
@@ -35,8 +35,10 @@ def fetch_complete_data(limit):
         try:
             df = yf.download(ticker, period="1y", interval="1d", progress=False)
             if df.empty or len(df) < 50: continue
-            if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+            if isinstance(df.columns, pd.MultiIndex): 
+                df.columns = df.columns.get_level_values(0)
 
+            # --- Technicals ---
             cp = float(df['Close'].iloc[-1])
             prev_cp = float(df['Close'].iloc[-2])
             day_change = ((cp - prev_cp) / prev_cp) * 100
@@ -45,11 +47,10 @@ def fetch_complete_data(limit):
             ma50 = df['Close'].rolling(50).mean().iloc[-1]
             ma200 = df['Close'].rolling(200).mean().iloc[-1]
             
-            # RSI
+            # RSI Calculation
             delta = df['Close'].diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-            rsi = 100 - (100 / (1 + (gain.iloc[-1] / loss.iloc[-1])))
+            rsi_val = 100 - (100 / (1 + (gain.iloc[-1] / loss.iloc[-1]))) if loss.iloc[-1] != 0 else 100
             
-            # Logic
-            df['Range'] =
+            # Range Logic for
