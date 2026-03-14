@@ -43,14 +43,12 @@ def run_full_scan(limit):
             cp = float(df['Close'].iloc[-1])
             m20, m50, m200 = df['Close'].rolling(20).mean().iloc[-1], df['Close'].rolling(50).mean().iloc[-1], df['Close'].rolling(200).mean().iloc[-1]
             
-            # --- VOLATILITY (VCP LOGIC) ---
+            # --- VOLATILITY & VOLUME ---
             high_low = df['High'] - df['Low']
-            df['TR'] = np.maximum(high_low, np.maximum(np.abs(df['High']-df['Close'].shift(1)), np.abs(df['Low']-df['Close'].shift(1))))
-            df['ATR'] = df['TR'].rolling(14).mean()
-            atr_ratio = df['ATR'].iloc[-1] / df['ATR'].rolling(50).mean().iloc[-1]
+            tr = np.maximum(high_low, np.maximum(np.abs(df['High']-df['Close'].shift(1)), np.abs(df['Low']-df['Close'].shift(1))))
+            atr = tr.rolling(14).mean()
+            atr_ratio = atr.iloc[-1] / atr.rolling(50).mean().iloc[-1]
             hist_vol = df['Close'].pct_change().rolling(20).std().iloc[-1] * np.sqrt(252) * 100
-
-            # --- VOLUME LOGIC ---
             vol, avg_vol = float(df['Volume'].iloc[-1]), df['Volume'].rolling(20).mean().iloc[-1]
             vol_surge = vol / avg_vol
 
@@ -65,7 +63,7 @@ def run_full_scan(limit):
                 "Ticker": t, "Sector": sector_map.get(t, "Misc"), "Price": round(cp, 2),
                 "Score": score, "Vol_Surge": round(vol_surge, 2), "ATR_Ratio": round(atr_ratio, 2),
                 "MA_Action": "🟢 STRONG" if cp > m20 > m50 > m200 else "⚪ NEUTRAL",
-                "ATR_Val": round(df['ATR'].iloc[-1], 2), "Hist_Vol": round(hist_vol, 2)
+                "ATR_Val": round(atr.iloc[-1], 2), "Hist_Vol": round(hist_vol, 2)
             })
         except:
             continue
@@ -96,21 +94,4 @@ if not st.session_state['scan_results'].empty:
         st.subheader("High Confluence Picks (Score 8-10)")
         st.dataframe(df[df['Score'] >= 8].sort_values("Score", ascending=False), use_container_width=True)
         st.markdown("---")
-        st.markdown("### 📖 Sniper Confluence Logic")
-        st.write("- **Trend (2 pts):** Bullish alignment (Price > MA20 > MA50)")
-        st.write("- **RS (2 pts):** Outperforming the Nifty 50 index")
-        st.write("- **Tightness (3 pts):** ATR is contracting (VCP pattern)")
-        st.write("- **Volume (3 pts):** Unusual buying pressure detected")
-
-    with tabs[1]:
-        st.subheader("Moving Average Trend Alignment")
-        st.dataframe(df[['Ticker', 'Price', 'MA_Action']].sort_values("MA_Action"), use_container_width=True)
-        st.markdown("---")
-        st.markdown("### 📈 Trend Action Logic")
-        st.write("- **STRONG BUY:** Price > MA20 > MA50 > MA200")
-        st.write("- **NEUTRAL:** Trend is sideways or mean-reverting")
-        [Image of a candlestick chart showing 20, 50, and 200-day moving averages in a clear bullish trend]
-
-    with tabs[2]:
-        st.subheader("Volume & Volatility Deep-Dive")
-        st.dataframe(df[['Ticker', 'Vol_Surge', 'ATR_
+        st.markdown("### 📖 Confluence Logic")
