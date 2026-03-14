@@ -67,7 +67,8 @@ def run_master_scan(limit):
             all_data.append({
                 "Ticker": t, "Sector": sector_map.get(t, "Misc"), "Price": round(cp, 2),
                 "MA_Action": ma_action, "Alert": alert, "MA20": round(m20, 2), 
-                "MA50": round(m50, 2), "Dist_MA20_%": round(dist_m20, 2),
+                "MA50": round(m50, 2), "MA200": round(m200, 2),
+                "Dist_MA20_%": round(dist_m20, 2),
                 "RS_Score": round(rs_score * 100, 2), 
                 "Tightness": "🎯 TIGHT" if atr_ratio < 0.9 else "🌊 LOOSE",
                 "ATR_Val": float(df['ATR'].iloc[-1])
@@ -82,7 +83,10 @@ depth = st.sidebar.slider("Scan Depth", 50, 500, 100)
 risk_per_trade = st.sidebar.number_input("Risk Amount (₹)", value=5000)
 
 if st.sidebar.button("🚀 EXECUTE DUAL SCAN"):
-    st.session_state['scan_results'] = run_master_scan(depth)
+    res = run_master_scan(depth)
+    if not res.empty:
+        st.session_state['scan_results'] = res
+        st.rerun()
 
 if not st.session_state['scan_results'].empty:
     df = st.session_state['scan_results']
@@ -101,29 +105,15 @@ if not st.session_state['scan_results'].empty:
 
     with t2:
         st.subheader("Moving Average Trend Alignment")
-        [Image of a candlestick chart showing 20, 50, and 200-day moving averages in a clear bullish trend]
         cols_ma = ['Ticker', 'Price', 'MA_Action', 'Alert', 'Dist_MA20_%', 'MA20', 'MA50']
         st.dataframe(df[cols_ma].sort_values(["Alert", "MA_Action"], ascending=[True, False]), use_container_width=True)
         
-        st.markdown("""
-        ---
-        ### 📈 The Trend Action Logic
-        * **🟢 STRONG BUY:** Occurs when $Price > MA_{20} > MA_{50} > MA_{200}$. This signals a **stacked momentum** profile.
-        * **🔥 BUY ZONE:** This highlights stocks that are in a Strong Buy trend but have pulled back close to the 20MA (within 0-3%).
-        * **Dist_MA20:** This is the "Rubber Band" indicator. If it's too high (>10%), don't chase the stock; wait for it to cool down.
-        """)
+        st.info("💡 Pro Tip: Look for 'BUY ZONE' alerts to find stocks resting on support.")
 
     with t3:
         st.subheader("Advanced Entry & Position Sizing")
-        [Image of a volatility contraction pattern (VCP) showing diminishing price swings leading to a breakout]
         cols_gen = ['Ticker', 'RS_Score', 'Tightness', 'Stop_Loss', 'Qty']
         st.dataframe(df[cols_gen].sort_values("RS_Score", ascending=False), use_container_width=True)
 
-        st.markdown(f"""
-        ---
-        ### 🧠 The Quant Genius Logic
-        * **RS Score (Relative Strength):** Compares the stock's 1-month performance against the Nifty 50. Positive = Market Leader.
-        * **Tightness (VCP):** Based on the ATR Ratio. **🎯 TIGHT** indicates that volatility is contracting—often the "calm before the storm."
-        * **ATR Stop Loss:** Sets a stop loss based on $2 \times$ volatility, ensuring you aren't shaken out by normal daily price swings.
-        * **Qty:** Tells you exactly how many shares to buy to risk exactly **₹{risk_per_trade}**.
-        """)
+else:
+    st.info("Terminal Ready. Run the scan to populate the analysis.")
