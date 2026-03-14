@@ -24,7 +24,7 @@ def run_full_scan(limit):
             nifty.columns = nifty.columns.get_level_values(0)
         nifty_perf_1m = (float(nifty['Close'].iloc[-1]) / float(nifty['Close'].iloc[-21])) - 1
     except Exception as e:
-        st.error(f"Error fetching index data: {e}")
+        st.error(f"Data Connection Error: {e}")
         return pd.DataFrame()
 
     all_data = []
@@ -68,7 +68,7 @@ def run_full_scan(limit):
                 "ATR_Val": round(df['ATR'].iloc[-1], 2), "Hist_Vol": round(hist_vol, 2)
             })
         except:
-            continue # Skip failed tickers
+            continue
             
     prog.empty()
     return pd.DataFrame(all_data)
@@ -76,7 +76,7 @@ def run_full_scan(limit):
 # --- 3. UI SIDEBAR ---
 st.sidebar.title("🏹 Nifty 500 Sniper")
 depth = st.sidebar.slider("Scan Depth", 50, 500, 100)
-risk_amt = st.sidebar.number_input("Risk Amount (₹)", value=5000)
+risk_amt = st.sidebar.number_input("Risk Amount (INR)", value=5000)
 
 if st.sidebar.button("🚀 START SCAN"):
     res = run_full_scan(depth)
@@ -95,9 +95,22 @@ if not st.session_state['scan_results'].empty:
     with tabs[0]:
         st.subheader("High Confluence Picks (Score 8-10)")
         st.dataframe(df[df['Score'] >= 8].sort_values("Score", ascending=False), use_container_width=True)
-        st.markdown("""
-        ---
-        ### 📖 Sniper Confluence Logic
-        * **Trend (2 pts):** Verified that the stock is in a stacked bullish alignment ($Price > MA_{20} > MA_{50}$).
-        * **RS (2 pts):** Outperforming the Nifty 50 over a 1-month rolling window.
-        * **Tightness (3 pts):** ATR is contracting, indicating a price 'coil' is forming.
+        st.markdown("---")
+        st.markdown("### 📖 Sniper Confluence Logic")
+        st.write("- **Trend (2 pts):** Bullish alignment (Price > MA20 > MA50)")
+        st.write("- **RS (2 pts):** Outperforming the Nifty 50 index")
+        st.write("- **Tightness (3 pts):** ATR is contracting (VCP pattern)")
+        st.write("- **Volume (3 pts):** Unusual buying pressure detected")
+
+    with tabs[1]:
+        st.subheader("Moving Average Trend Alignment")
+        st.dataframe(df[['Ticker', 'Price', 'MA_Action']].sort_values("MA_Action"), use_container_width=True)
+        st.markdown("---")
+        st.markdown("### 📈 Trend Action Logic")
+        st.write("- **STRONG BUY:** Price > MA20 > MA50 > MA200")
+        st.write("- **NEUTRAL:** Trend is sideways or mean-reverting")
+        [Image of a candlestick chart showing 20, 50, and 200-day moving averages in a clear bullish trend]
+
+    with tabs[2]:
+        st.subheader("Volume & Volatility Deep-Dive")
+        st.dataframe(df[['Ticker', 'Vol_Surge', 'ATR_
