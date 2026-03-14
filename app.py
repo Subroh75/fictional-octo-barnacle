@@ -23,7 +23,6 @@ def run_full_scan(limit):
             nifty.columns = nifty.columns.get_level_values(0)
         nifty_perf_1m = (float(nifty['Close'].iloc[-1]) / float(nifty['Close'].iloc[-21])) - 1
     except:
-        # Fallback if NSE site is down
         symbols = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS"]
         sector_map = {s: "Bluechip" for s in symbols}
         nifty_perf_1m = 0.02
@@ -39,22 +38,17 @@ def run_full_scan(limit):
             if isinstance(df.columns, pd.MultiIndex): 
                 df.columns = df.columns.get_level_values(0)
 
-            # Technical Calcs
             cp = float(df['Close'].iloc[-1])
             m20, m50, m200 = df['Close'].rolling(20).mean().iloc[-1], df['Close'].rolling(50).mean().iloc[-1], df['Close'].rolling(200).mean().iloc[-1]
             
-            # Volatility
             high_low = df['High'] - df['Low']
             tr = np.maximum(high_low, np.maximum(np.abs(df['High']-df['Close'].shift(1)), np.abs(df['Low']-df['Close'].shift(1))))
             atr = tr.rolling(14).mean().iloc[-1]
-            atr_50 = tr.rolling(50).mean().iloc[-1]
-            atr_ratio = atr / atr_50
+            atr_ratio = atr / tr.rolling(50).mean().iloc[-1]
             
-            # Volume
             vol, avg_vol = float(df['Volume'].iloc[-1]), df['Volume'].rolling(20).mean().iloc[-1]
             vol_surge = vol / avg_vol
 
-            # Confluence Score
             score = 0
             if cp > m20 > m50: score += 2  
             if ((cp / float(df['Close'].iloc[-21])) - 1) - nifty_perf_1m > 0: score += 2 
@@ -83,11 +77,24 @@ if st.sidebar.button("🚀 START SCAN"):
         st.session_state['scan_results'] = data
         st.rerun()
 
-# --- 4. DISPLAY TABS ---
 results = st.session_state['scan_results']
 
+# --- SIDEBAR TOP 5 SUMMARY ---
 if results is not None and not results.empty:
-    # Calculations
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🎯 Top 5 Sniper Picks")
+    top_5 = results.sort_values("Score", ascending=False).head(5)
+    for _, row in top_5.iterrows():
+        # Using metric for a professional trading terminal look
+        st.sidebar.metric(
+            label=f"{row['Ticker']}", 
+            value=f"Score: {row['Score']}", 
+            delta=f"Price: ₹{row['Price']}",
+            delta_color="off" # Keeps the price text neutral/white
+        )
+
+# --- 4. DISPLAY TABS ---
+if results is not None and not results.empty:
     results['Stop_Loss'] = results['Price'] - (2 * results['ATR_Val'])
     results['Qty'] = (risk_amt / (results['Price'] - results['Stop_Loss'])).replace([np.inf, -np.inf], 0).fillna(0).astype(int)
 
@@ -95,18 +102,17 @@ if results is not None and not results.empty:
 
     with t1:
         st.subheader("High Confluence Leaderboard")
-        top = results[results['Score'] >= 6].sort_values("Score", ascending=False)
-        st.dataframe(top, use_container_width=True)
+        st.dataframe(results[results['Score'] >= 6].sort_values("Score", ascending=False), use_container_width=True)
         st.markdown("---")
         st.markdown("### 🎯 Sniper Logic: Triple Confluence")
-        st.write("We look for stocks where **Trend + Volume + Tightness** align. A score > 8 indicates a prime swing candidate.")
+        st.write("Highest priority is given to stocks where Momentum, Institutional Buying, and Volatility Contraction hit simultaneously.")
 
     with t2:
         st.subheader("Trend Alignment")
         st.dataframe(results[['Ticker', 'Price', 'Trend']], use_container_width=True)
         st.markdown("---")
         st.markdown("### 📈 Trend Action Logic")
-        st.write("Stocks are flagged as **STRONG** when the Price is above the 20, 50, and 200-day Moving Averages.")
+        st.write("A 'Strong' trend indicates the price is above key Moving Averages, suggesting the path of least resistance is up.")
         
 
     with t3:
@@ -114,7 +120,7 @@ if results is not None and not results.empty:
         st.dataframe(results[['Ticker', 'Vol_Surge', 'ATR_Ratio']], use_container_width=True)
         st.markdown("---")
         st.markdown("### 📊 Volatility Contraction (VCP)")
-        st.write("An **ATR Ratio < 0.90** signals that price is tightening (VCP). This often precedes a massive breakout.")
+        st.write("We look for the 'Coil' effect. When price swings (ATR) get smaller while the stock is in a trend, a breakout is likely near.")
         
 
     with t4:
@@ -122,7 +128,7 @@ if results is not None and not results.empty:
         st.dataframe(results[['Ticker', 'Price', 'Stop_Loss', 'Qty']], use_container_width=True)
         st.markdown("---")
         st.markdown(f"### 🧠 Risk Management (INR {risk_amt})")
-        st.write("The Qty is calculated so you lose exactly your risk amount if the 2x ATR Stop Loss is hit.")
+        st.write("Position sizing ensures that even a 50% failure rate won't destroy your capital, provided you exit at the calculated Stop Loss.")
 
     with t5:
         st.subheader("Institutional Footprint")
@@ -130,8 +136,8 @@ if results is not None and not results.empty:
         st.dataframe(inst[['Ticker', 'Sector', 'Vol_Surge']], use_container_width=True)
         st.markdown("---")
         st.markdown("### 👣 Footprint Logic")
-        st.write("Volume Surge > 1.8 indicates 'Institutional Footprints'—big players entering the stock.")
+        st.write("Institutional accumulation often leaves a trail of high-volume surges on days where the price barely moves or trends slightly higher.")
         
 
 else:
-    st.warning("No data found. Please click 'START SCAN' in the sidebar to begin.")
+    st.info("Nifty 500 Sniper Ready. Click START SCAN to begin.")
