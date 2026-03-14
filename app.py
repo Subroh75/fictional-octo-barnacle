@@ -95,4 +95,36 @@ if not st.session_state['scan_results'].empty:
     df['Stop_Loss'] = df['Price'] - (2 * df['ATR_Val'])
     df['Qty'] = (risk_per_trade / (df['Price'] - df['Stop_Loss'])).replace([np.inf, -np.inf], 0).fillna(0).astype(int)
 
-    t1, t2, t3 = st.tabs(["🌍 Birds-Eye View", "📈 Trend
+    # Fixed Tabs Syntax
+    t1, t2, t3 = st.tabs(["🌍 Birds-Eye View", "📈 Trend Action (MA)", "🧠 Quant Genius Lab"])
+
+    with t1:
+        st.subheader("Interactive Sector Map")
+        fig = px.treemap(df, path=['Sector', 'Ticker'], values=np.abs(df['RS_Score']),
+                         color='RS_Score', color_continuous_scale='RdYlGn', height=700)
+        st.plotly_chart(fig, use_container_width=True)
+
+    with t2:
+        st.subheader("Moving Average Trend Alignment")
+        cols_ma = ['Ticker', 'Price', 'MA_Action', 'Alert', 'Dist_MA20_%', 'MA20', 'MA50']
+        st.dataframe(df[cols_ma].sort_values(["Alert", "MA_Action"], ascending=[True, False]), use_container_width=True)
+        
+        st.markdown("---")
+        st.markdown("### 📖 The Trend Action Logic")
+        st.markdown("* **🟢 STRONG BUY:** Price > MA20 > MA50 > MA200. This is the 'Perfect Alignment' for momentum.")
+        st.markdown("* **🔥 BUY ZONE:** The 'Pullback Entry.' The stock is in an uptrend but has moved back within 0-3% of its 20-day average.")
+        st.markdown("* **Dist_MA20_%:** Measures the 'stretch.' If >10%, the stock is overextended—do not chase.")
+
+    with t3:
+        st.subheader("Advanced Entry & Position Sizing")
+        cols_gen = ['Ticker', 'RS_Score', 'Tightness', 'Stop_Loss', 'Qty']
+        st.dataframe(df[cols_gen].sort_values("RS_Score", ascending=False), use_container_width=True)
+
+        st.markdown("---")
+        st.markdown("### 🧠 The Quant Genius Logic")
+        st.markdown("* **RS Score:** Relative Strength against Nifty 50. Positive = Market Leader.")
+        st.markdown("* **Tightness (VCP):** Measures volatility contraction. **🎯 TIGHT** setups precede explosive breakouts.")
+        st.markdown("* **ATR Stop Loss:** A volatility-adjusted stop ($2 \\times ATR$). Filters 'daily noise' to prevent premature exits.")
+        st.markdown(f"* **Qty:** Number of shares to buy to limit loss to **₹{risk_per_trade}**.")
+else:
+    st.info("Terminal Ready. Run the scan to populate the analysis.")
