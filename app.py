@@ -8,8 +8,11 @@ from datetime import datetime
 # --- 1. CONFIG & SESSION STATE ---
 st.set_page_config(page_title="Alpha Quant Terminal", layout="wide")
 
+# Initialize session state with empty but structured DataFrame to prevent KeyErrors
 if 'scan_results' not in st.session_state:
-    st.session_state['scan_results'] = pd.DataFrame()
+    st.session_state['scan_results'] = pd.DataFrame(columns=[
+        "Ticker", "Sector", "Price", "1W %", "1M %", "Action", "Surge", "Score"
+    ])
 
 # --- 2. FUNCTION DEFINITIONS ---
 
@@ -46,7 +49,6 @@ def run_master_scan(limit):
             cp = float(df['Close'].iloc[-1])
             m20, m50, m200 = df['Close'].rolling(20).mean().iloc[-1], df['Close'].rolling(50).mean().iloc[-1], df['Close'].rolling(200).mean().iloc[-1]
             
-            # Performance Calc
             perf_1w = ((cp / df['Close'].iloc[-5]) - 1) * 100
             perf_1m = ((cp / df['Close'].iloc[-21]) - 1) * 100
             
@@ -70,31 +72,36 @@ reg_name, reg_color = get_market_regime()
 st.sidebar.title("🛠️ Alpha Dashboard")
 st.sidebar.markdown(f"### Market: <span style='color:{reg_color}'>{reg_name}</span>", unsafe_allow_html=True)
 
-# Sector Leaderboard in Sidebar
-if not st.session_state['scan_results'].empty:
+# Safety Fix: Only show leaderboard if Sector column exists and has data
+if not st.session_state['scan_results'].empty and 'Sector' in st.session_state['scan_results'].columns:
     st.sidebar.markdown("---")
     st.sidebar.subheader("🏆 Top Sectors (1W)")
-    leaderboard = st.session_state['scan_results'].groupby('Sector')['1W %'].mean().sort_values(ascending=False).head(5)
-    for sec, val in leaderboard.items():
-        st.sidebar.write(f"**{sec}**: `{val:.2f}%`")
+    try:
+        leaderboard = st.session_state['scan_results'].groupby('Sector')['1W %'].mean().sort_values(ascending=False).head(5)
+        for sec, val in leaderboard.items():
+            st.sidebar.write(f"**{sec}**: `{val:.2f}%`")
+    except:
+        pass
 
 depth = st.sidebar.slider("Scan Depth", 50, 500, 150)
 if st.button("🚀 EXECUTE GLOBAL SCAN"):
-    st.session_state['scan_results'] = run_master_scan(depth)
+    res = run_master_scan(depth)
+    if not res.empty:
+        st.session_state['scan_results'] = res
+        st.rerun() # Refresh to update sidebar leaderboard
 
 # --- 4. TABS ---
 if not st.session_state['scan_results'].empty:
     df = st.session_state['scan_results']
-    t1, t2, t3 = st.tabs(["🌍 Birds-Eye View", "🎯 Momentum Picks", "💥 Sector Deep-Dive"])
+    t1, t2, t3, t4 = st.tabs(["🌍 Birds-Eye View", "🎯 Momentum Picks", "💥 Sector Deep-Dive", "🔥 Volume Shockers"])
 
     with t1:
-        st.subheader("Market Map (Sector & Ticker Performance)")
-        # Performance Heatmap
-        
+        st.subheader("Market Map")
         fig = px.treemap(df, path=['Sector', 'Ticker'], values=np.abs(df['1W %']),
                          color='1W %', color_continuous_scale='RdYlGn',
-                         range_color=[-10, 10], hover_data=['Price', 'Action'])
+                         range_color=[-8, 8], hover_data=['Price', 'Action'])
         st.plotly_chart(fig, use_container_width=True)
+        
 
     with t2:
         st.subheader("Top Ranked Individual Stocks")
@@ -102,15 +109,20 @@ if not st.session_state['scan_results'].empty:
         st.dataframe(picks, use_container_width=True)
 
     with t3:
-        st.subheader("Sector-wise Quality & Momentum")
-        
-        sec_df = df.groupby('Sector').agg({
-            '1W %': 'mean',
-            '1M %': 'mean',
-            'Ticker': 'count',
-            'Score': 'mean'
-        }).rename(columns={'Ticker': 'Stocks', 'Score': 'Avg Score'}).sort_values('1W %', ascending=False)
-        
+        st.subheader("Sector-wise Strength")
+        sec_df = df.groupby('Sector').agg({'1W %': 'mean', '1M %': 'mean', 'Ticker': 'count', 'Score': 'mean'}).sort_values('1W %', ascending=False)
         st.dataframe(sec_df.style.background_gradient(cmap='RdYlGn', subset=['1W %', '1M %']), use_container_width=True)
+        
+
+    with t4:
+        st.subheader("⚠️ Volume Shockers (>3x Average)")
+        # Showing stocks with unusual institutional activity
+        shockers = df[df['Surge'] >= 3.0].sort_values(by="Surge", ascending=False)
+        if not shockers.empty:
+            st.warning("High volume surges often precede explosive 3-5 day moves.")
+            st.dataframe(shockers[['Ticker', 'Sector', 'Surge', 'Price', 'Action']], use_container_width=True)
+        else:
+            st.write("No major volume surges detected in this scan depth.")
+
 else:
     st.info("Scanner Ready. Run the scan to view market-wide sector performance.")
