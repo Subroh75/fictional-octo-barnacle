@@ -5,10 +5,9 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import google.generativeai as genai
-from backtesting import Backtest, Strategy
 from datetime import datetime
 
-# --- 1. CONFIG & AI INITIALIZATION ---
+# --- 1. CONFIG ---
 st.set_page_config(page_title="Nifty Sniper Institutional AI", layout="wide")
 
 def initialize_ai():
@@ -23,27 +22,9 @@ ai_active = initialize_ai()
 if 'scan_results' not in st.session_state:
     st.session_state['scan_results'] = None
 
-# --- 2. AI TOOLS ---
-def ai_filter_logic(query, df):
-    if not ai_active: return df
-    model = genai.GenerativeModel('gemini-2.5-flash')
-    prompt = f"Convert to pandas query: '{query}'. Columns: {list(df.columns)}. Return ONLY code."
-    try:
-        resp = model.generate_content(prompt)
-        return df.query(resp.text.strip().replace('`', '').replace('python', ''))
-    except: return df
-
-def summon_judge(ticker, row, vix):
-    if not ai_active: return "AI Offline."
-    model = genai.GenerativeModel('gemini-2.5-flash')
-    now = datetime.now().strftime("%Y-%m-%d")
-    prompt = f"Date: {now} | Ticker: {ticker} | Score: {row['Score']} | VIX: {vix}. Technical verdict?"
-    try: return model.generate_content(prompt).text
-    except: return "Judge busy."
-
-# --- 3. DATA ENGINE (FIXED FOR MA & MULTI-INDEX) ---
+# --- 2. DATA ENGINE (THE AGGRESSIVE FIX) ---
 @st.cache_data(ttl=3600)
-def run_full_scan(limit, vix):
+def run_full_scan(limit):
     url = 'https://archives.nseindia.com/content/indices/ind_nifty500list.csv'
     try:
         n500 = pd.read_csv(url)
@@ -54,59 +35,72 @@ def run_full_scan(limit, vix):
         sector_map = {s: "Misc" for s in symbols}
 
     all_data = []
-    prog = st.progress(0, text="Calculating Structural Trends...")
+    prog = st.progress(0, text="Fetching Clean Market Data...")
+    
     for i, t in enumerate(symbols[:limit]):
         prog.progress((i + 1) / limit)
         try:
-            # 1. Download and immediately fix index
-            raw_df = yf.download(t, period="1y", progress=False)
-            if raw_df.empty: continue
+            # Fetch 2 years to ensure MA200 has enough data
+            raw = yf.download(t, period="2y", progress=False)
+            if raw.empty or len(raw) < 200: continue
             
-            # 2. FORCE SINGLE INDEX (The Fix for NaN MAs)
-            df = pd.DataFrame(index=raw_df.index)
-            df['Close'] = raw_df['Close'].values.flatten()
-            df['High'] = raw_df['High'].values.flatten()
-            df['Low'] = raw_df['Low'].values.flatten()
-            df['Volume'] = raw_df['Volume'].values.flatten()
+            # --- THE FIX: MANUALLY EXTRACTING ARRAYS ---
+            # This ignores all MultiIndex/Header issues by going straight to the numbers
+            close_prices = raw['Close'].values.flatten()
+            high_prices = raw['High'].values.flatten()
+            low_prices = raw['Low'].values.flatten()
+            volumes = raw['Volume'].values.flatten()
 
-            # 3. Trend Calculations on Clean Data
-            cp = float(df['Close'].iloc[-1])
-            m20 = df['Close'].rolling(20).mean().iloc[-1]
-            m50 = df['Close'].rolling(50).mean().iloc[-1]
-            m200 = df['Close'].rolling(200).mean().iloc[-1]
+            # Create a clean temporary Series for calculations
+            s_close = pd.Series(close_prices)
+            
+            cp = float(s_close.iloc[-1])
+            m20 = float(s_close.tail(20).mean())
+            m50 = float(s_close.tail(50).mean())
+            m200 = float(s_close.tail(200).mean())
+            
             dist_ma20 = ((cp - m20) / m20) * 100
             
-            vol_surge = float(df['Volume'].iloc[-1]) / df['Volume'].rolling(20).mean().iloc[-1]
-            tr = np.maximum(df['High']-df['Low'], np.maximum(np.abs(df['High']-df['Close'].shift(1)), np.abs(df['Low']-df['Close'].shift(1))))
-            atr = tr.rolling(14).mean().iloc[-1]
+            # Volume Surge
+            avg_vol = float(pd.Series(volumes).tail(20).mean())
+            vol_surge = float(volumes[-1]) / avg_vol if avg_vol != 0 else 0
+
+            # ATR Calculation
+            df_temp = pd.DataFrame({'H': high_prices, 'L': low_prices, 'C': close_prices})
+            df_temp['tr'] = np.maximum(df_temp['H']-df_temp['L'], 
+                             np.maximum(np.abs(df_temp['H']-df_temp['C'].shift(1)), 
+                                        np.abs(df_temp['L']-df_temp['C'].shift(1))))
+            atr = float(df_temp['tr'].tail(14).mean())
 
             score = 0
             if cp > m20 > m50: score += 2
             if cp > m200: score += 3
             if vol_surge > 1.8: score += 5
 
-            p_change = (cp - float(df['Close'].iloc[-2])) / float(df['Close'].iloc[-2])
+            p_change = (cp - s_close.iloc[-2]) / s_close.iloc[-2]
             action = "🔥 AGGRESSIVE BUY" if (p_change > 0 and vol_surge > 1.8) else "💎 ACCUMULATE" if p_change > 0 else "💤 HOLD"
 
             all_data.append({
                 "Ticker": t, "Sector": sector_map.get(t, "Misc"), "Price": round(cp, 2),
                 "MA20": round(m20, 2), "MA50": round(m50, 2), "MA200": round(m200, 2),
-                "Dist_MA20": round(dist_ma20, 2), "Score": score, "Vol_Surge": round(vol_surge, 2),
-                "Trend": "🟢 STRONG" if cp > m200 else "⚪ NEUTRAL",
-                "Action": action, "ATR": round(atr, 2)
+                "Dist_MA20": f"{round(dist_ma20, 2)}%", "Score": score, 
+                "Vol_Surge": round(vol_surge, 2), "Action": action, "ATR": round(atr, 2),
+                "Trend": "🟢 STRONG" if cp > m200 else "⚪ NEUTRAL"
             })
-        except: continue
+        except Exception as e:
+            continue
+            
     prog.empty()
     return pd.DataFrame(all_data)
 
-# --- 4. INTERFACE ---
+# --- 3. UI ---
 st.sidebar.title("🏹 Nifty Sniper AI")
 v_vix = st.sidebar.number_input("India VIX", value=21.84)
 v_depth = st.sidebar.slider("Depth", 50, 500, 100)
 v_risk = st.sidebar.number_input("Risk (INR)", value=5000)
 
 if st.sidebar.button("🚀 START AI SCAN"):
-    res = run_full_scan(v_depth, v_vix)
+    res = run_full_scan(v_depth)
     if not res.empty:
         sl_m = 3.0 if v_vix > 20 else 2.0
         res['Stop_Loss'] = res['Price'] - (sl_m * res['ATR'])
@@ -116,22 +110,14 @@ if st.sidebar.button("🚀 START AI SCAN"):
 if st.session_state['scan_results'] is not None:
     df = st.session_state['scan_results']
     
-    # Judge & Screener Integrated
-    st.subheader("💬 AI Natural Language Screener")
-    ai_q = st.text_input("Filter: 'Score > 8 and Dist_MA20 < 2'")
-    if ai_q: df = ai_filter_logic(ai_q, df)
-
-    t1, t2, t3, t4 = st.tabs(["🎯 Leaderboard", "📈 Trends", "🧠 Risk Lab", "🧬 Intelligence Lab"])
+    t1, t2, t3 = st.tabs(["🎯 Leaderboard", "📈 Trends & MAs", "🧠 Risk Lab"])
     
     with t1: st.dataframe(df.sort_values("Score", ascending=False), use_container_width=True)
     with t2:
-        st.subheader("MA Trends & Distance")
+        st.subheader("Structural Trend Analysis")
+        # Explicitly showing the new MA columns
         st.dataframe(df[['Ticker', 'Price', 'MA20', 'MA50', 'MA200', 'Dist_MA20', 'Trend']], use_container_width=True)
-    with t3: st.dataframe(df[['Ticker', 'Price', 'Stop_Loss', 'Qty', 'Action']], use_container_width=True)
-    with t4:
-        st.subheader("🧬 Supreme Judge")
-        tgt = st.selectbox("Select Stock", df['Ticker'].tolist())
-        if st.button("⚖️ Analyze"):
-            st.write(summon_judge(tgt, df[df['Ticker'] == tgt].iloc[0], v_vix))
+    with t3:
+        st.dataframe(df[['Ticker', 'Price', 'Stop_Loss', 'Qty', 'Action']], use_container_width=True)
 else:
     st.info("System Ready. Click 'START AI SCAN'.")
