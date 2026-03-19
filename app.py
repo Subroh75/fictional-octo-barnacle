@@ -3,14 +3,13 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import google.generativeai as genai
-import requests
-from bs4 import BeautifulSoup
 
 # --- 1. CONFIG & AI INITIALIZATION ---
 st.set_page_config(page_title="Nifty 500 Sniper AI", layout="wide")
 
 def initialize_ai():
     try:
+        # Pulls the secret from your Streamlit Dashboard
         if "GEMINI_API_KEY" in st.secrets:
             genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
             return True
@@ -26,12 +25,14 @@ if 'scan_results' not in st.session_state:
 # --- 2. AI MODULE: THE SCREENER ---
 def ai_filter_logic(query, df):
     if not ai_active: return df
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    # Using Gemini 2.5 Flash for speed and 2026 compatibility
+    model = genai.GenerativeModel('gemini-2.5-flash')
     prompt = f"Convert this to a pandas query: '{query}'. Columns: Ticker, Sector, Price, Score, Vol_Surge, ATR_Ratio. Return ONLY the code."
     try:
         response = model.generate_content(prompt)
         return df.query(response.text.strip().replace('`', ''))
-    except: return df
+    except:
+        return df
 
 # --- 3. DATA ENGINE (Nifty 500 Logic) ---
 @st.cache_data(ttl=3600)
@@ -42,20 +43,24 @@ def run_full_scan(limit):
         symbols = [s + ".NS" for s in n500['Symbol'].tolist()]
         sector_map = dict(zip(n500['Symbol'] + ".NS", n500['Industry']))
         nifty = yf.download("^NSEI", period="1y", progress=False)
-        if isinstance(nifty.columns, pd.MultiIndex): nifty.columns = nifty.columns.get_level_values(0)
+        if isinstance(nifty.columns, pd.MultiIndex): 
+            nifty.columns = nifty.columns.get_level_values(0)
         nifty_perf_1m = (float(nifty['Close'].iloc[-1]) / float(nifty['Close'].iloc[-21])) - 1
     except:
-        symbols = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "FLUOROCHEM.NS"]
-        sector_map = {s: "Misc" for s in symbols}; nifty_perf_1m = 0.02
+        symbols = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS"]
+        sector_map = {s: "Misc" for s in symbols}
+        nifty_perf_1m = 0.02
 
     all_data = []
     prog = st.progress(0, text="Snipering Nifty 500 Data...")
+    
     for i, t in enumerate(symbols[:limit]):
         prog.progress((i + 1) / limit)
         try:
             df = yf.download(t, period="1y", progress=False)
             if df.empty or len(df) < 100: continue
-            if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+            if isinstance(df.columns, pd.MultiIndex): 
+                df.columns = df.columns.get_level_values(0)
 
             cp = float(df['Close'].iloc[-1])
             m20, m50, m200 = df['Close'].rolling(20).mean().iloc[-1], df['Close'].rolling(50).mean().iloc[-1], df['Close'].rolling(200).mean().iloc[-1]
@@ -64,7 +69,6 @@ def run_full_scan(limit):
             atr_ratio = atr / tr.rolling(50).mean().iloc[-1]
             vol_surge = float(df['Volume'].iloc[-1]) / df['Volume'].rolling(20).mean().iloc[-1]
 
-            # Logic
             p_change = (cp - float(df['Close'].iloc[-2])) / float(df['Close'].iloc[-2])
             action = "🔥 AGGRESSIVE BUY" if (p_change > 0 and vol_surge > 1.5) else "💎 ACCUMULATE" if p_change > 0 else "💤 HOLD"
             
@@ -83,7 +87,7 @@ def run_full_scan(limit):
     prog.empty()
     return pd.DataFrame(all_data)
 
-# --- 4. SIDEBAR & THE SLIM-CONTEXT JUDGE ---
+# --- 4. SIDEBAR & THE SUPREME JUDGE ---
 st.sidebar.title("🏹 Nifty Sniper AI")
 depth = st.sidebar.slider("Scan Depth", 50, 500, 100)
 risk_val = st.sidebar.number_input("Risk Amount (INR)", value=5000)
@@ -105,25 +109,37 @@ if st.session_state['scan_results'] is not None and ai_active:
                 try:
                     all_t = st.session_state['scan_results']['Ticker'].tolist()
                     target = next((t for t in all_t if t.split('.')[0] in user_ask.upper()), None)
-                   model = genai.GenerativeModel('gemini-2.5-pro')
-                    # Targeted Context to prevent API Crashes
-                    context = st.session_state['scan_results'][st.session_state['scan_results']['Ticker'] == target].to_string() if target else st.session_state['scan_results'].head(10).to_string()
+                    model = genai.GenerativeModel('gemini-2.5-flash')
+                    
+                    if target:
+                        specific_data = st.session_state['scan_results'][st.session_state['scan_results']['Ticker'] == target]
+                        context = specific_data.to_string()
+                    else:
+                        context = st.session_state['scan_results'].head(10).to_string()
+                    
                     resp = model.generate_content(f"Data: {context}. VIX: 21.42. Question: {user_ask}")
                     st.write(resp.text)
-                except Exception as e: st.error(f"Error: {e}")
+                except Exception as e:
+                    st.error(f"Error: {e}")
 
 # --- 5. MAIN INTERFACE ---
 if st.session_state['scan_results'] is not None:
     df = st.session_state['scan_results']
     st.subheader("💬 AI Natural Language Screener")
     ai_q = st.text_input("Search (e.g. 'Score > 5 and Sector == \"Chemicals\"')")
-    if ai_q: df = ai_filter_logic(ai_q, df)
+    if ai_q:
+        df = ai_filter_logic(ai_q, df)
 
     t1, t2, t3, t4, t5 = st.tabs(["🎯 Leaderboard", "📈 Trends", "📊 Vol Lab", "🧠 Risk Lab", "👣 Inst. Flow"])
-    with t1: st.dataframe(df.sort_values("Score", ascending=False), use_container_width=True)
-    with t2: st.dataframe(df[['Ticker', 'Price', 'Trend', 'Sector']], use_container_width=True)
-    with t3: st.dataframe(df[['Ticker', 'Vol_Surge', 'ATR_Ratio', 'Action']], use_container_width=True)
-    with t4: st.dataframe(df[['Ticker', 'Price', 'Stop_Loss', 'Qty']], use_container_width=True)
-    with t5: st.dataframe(df[df['Vol_Surge'] > 1.8][['Ticker', 'Vol_Surge', 'Action']], use_container_width=True)
+    with t1:
+        st.dataframe(df.sort_values("Score", ascending=False), use_container_width=True)
+    with t2:
+        st.dataframe(df[['Ticker', 'Price', 'Trend', 'Sector']], use_container_width=True)
+    with t3:
+        st.dataframe(df[['Ticker', 'Vol_Surge', 'ATR_Ratio', 'Action']], use_container_width=True)
+    with t4:
+        st.dataframe(df[['Ticker', 'Price', 'Stop_Loss', 'Qty']], use_container_width=True)
+    with t5:
+        st.dataframe(df[df['Vol_Surge'] > 1.8][['Ticker', 'Vol_Surge', 'Action']], use_container_width=True)
 else:
     st.info("Ready. Adjust settings and click 'START SCAN'.")
