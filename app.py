@@ -105,7 +105,7 @@ if st.session_state['scan_results'] is not None and ai_active:
                 try:
                     all_t = st.session_state['scan_results']['Ticker'].tolist()
                     target = next((t for t in all_t if t.split('.')[0] in user_ask.upper()), None)
-                    model = genai.GenerativeModel('gemini-1.5-pro')
+                   model = genai.GenerativeModel('gemini-2.5-pro')
                     # Targeted Context to prevent API Crashes
                     context = st.session_state['scan_results'][st.session_state['scan_results']['Ticker'] == target].to_string() if target else st.session_state['scan_results'].head(10).to_string()
                     resp = model.generate_content(f"Data: {context}. VIX: 21.42. Question: {user_ask}")
