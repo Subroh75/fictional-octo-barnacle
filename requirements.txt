@@ -1,8 +1,6 @@
 streamlit
-pandas
+pandas==2.2.2
 yfinance
 numpy<2.0.0
 google-generativeai
 pandas_ta
-backtesting
-bokeh==2.4.3
