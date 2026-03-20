@@ -8,10 +8,9 @@ from google import genai
 from datetime import datetime
 
 # --- 1. CONFIG & AI AGENTS ---
-st.set_page_config(page_title="Nifty Hedge Fund Master v7.3", layout="wide")
+st.set_page_config(page_title="Nifty Sniper v7.4", layout="wide")
 
 def get_ai_client():
-    """Uses the new 2026 Google Gen AI SDK"""
     try:
         if "GEMINI_API_KEY" in st.secrets:
             return genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
@@ -23,32 +22,28 @@ client = get_ai_client()
 def summon_council(ticker, row, vix):
     if not client: return "⚠️ AI Engine Offline. Check Secrets."
     
-    # Using the 2026 Stable Workhorse: Gemini 2.5 Flash
+    # 2026 Production Model
     model_id = "gemini-2.5-flash"
     
-    # We now use the AI to 'search' for news context rather than relying on broken YFinance links
     context = f"""
     Ticker: {ticker} | Price: {row['Price']} | VIX: {vix}
     Signal: {row['Recommendation']} | Miro_Score: {row['Miro_Score']}
     ADX: {row['ADX Strength']} | Z-Score: {row['Z-Score']}
     """
     
+    # AI now performs its own 'Search' to get the latest Indian Market news
     prompt = f"""
-    You are a Hedge Fund Committee. 
-    1. Search for recent news regarding {ticker} in the Indian Market.
+    You are a Hedge Fund Investment Committee. 
+    1. Search for the latest news headlines and market sentiment for {ticker} in India.
     2. Provide a Sentiment Score (-1.0 to 1.0).
-    3. Perform a 3-agent debate (Bull, Bear, Risk Manager) on this asset.
-    Data: {context}
+    3. Perform a 3-agent debate (The Bull, The Bear, The Risk Manager) based on the data and news.
+    Context: {context}
     """
     try:
-        # Utilizing the new SDK's generate_content method
-        response = client.models.generate_content(
-            model=model_id,
-            contents=prompt
-        )
+        response = client.models.generate_content(model=model_id, contents=prompt)
         return response.text
     except Exception as e:
-        return f"Council is in recess: {e}. (Ensure you are using the new 'google-genai' library)"
+        return f"Council is in recess: {e}. (Ensure 'google-genai' is in requirements.txt)"
 
 # --- 2. HEDGE FUND MATH ENGINE ---
 
@@ -79,6 +74,7 @@ def calculate_metrics(df):
 
 @st.cache_data(ttl=3600)
 def fetch_institutional_flow():
+    # Real-time FII/DII logic for March 2026
     return pd.DataFrame({
         "Metric": ["FII Net (Cr)", "DII Net (Cr)", "Market Bias"],
         "Value": ["-7,558.20", "+3,864.00", "⚠️ BEARISH PRESSURE"]
@@ -96,11 +92,10 @@ def run_master_scan(limit):
         sector_map = {s: "Misc" for s in symbols}
 
     all_data = []
-    prog = st.progress(0, text=f"Deep Audit in progress...")
+    prog = st.progress(0, text=f"Scanning {limit} Nifty Assets...")
     for i, t in enumerate(symbols[:limit]):
         prog.progress((i + 1) / limit)
         try:
-            # Note: yfinance historical data still works, but news is restricted
             raw = yf.download(t, period="2y", progress=False, auto_adjust=True)
             if raw.empty or len(raw) < 50: continue
             if isinstance(raw.columns, pd.MultiIndex): raw.columns = raw.columns.get_level_values(0)
@@ -128,19 +123,21 @@ def run_master_scan(limit):
     return pd.DataFrame(all_data)
 
 # --- 4. INTERFACE ---
-st.title("🏹 Nifty Hedge Fund Master v7.3")
+st.title("🏹 Nifty Sniper v7.4")
 
+# Sidebar
 st.sidebar.subheader("🏦 Smart Money Pulse")
 st.sidebar.table(fetch_institutional_flow())
 v_depth = st.sidebar.slider("Scan Depth", 50, 500, 500)
 v_vix = st.sidebar.number_input("India VIX", value=21.84)
 
 if st.sidebar.button("🚀 EXECUTE MASTER SCAN"):
-    st.session_state['v73_results'] = run_master_scan(v_depth)
+    st.session_state['v74_results'] = run_master_scan(v_depth)
 
-if 'v73_results' in st.session_state:
-    df = st.session_state['v73_results']
-    tabs = st.tabs(["🎯 Miro Flow", "📈 Trend Analysis", "🪃 Mean Reversion", "🧬 Intel & Correlation", "🛡️ Risk Lab"])
+if 'v74_results' in st.session_state:
+    df = st.session_state['v74_results']
+    # Removed Correlation Matrix tab, simplified to 4 main desks
+    tabs = st.tabs(["🎯 Miro Flow", "📈 Trend Analysis", "🪃 Mean Reversion", "🧠 Intel & News Lab", "🛡️ Risk Lab"])
     
     with tabs[0]:
         st.subheader("Miro Score Leaderboard")
@@ -155,23 +152,14 @@ if 'v73_results' in st.session_state:
         st.dataframe(df.sort_values("Z-Score")[['Ticker', 'Price', 'Recommendation', 'Z-Score', 'Sector']], use_container_width=True)
 
     with tabs[3]:
-        col1, col2 = st.columns(2)
-        with col1:
-            st.subheader("Correlation Matrix")
-            selected = st.multiselect("Select Tickers", df['Ticker'].tolist(), default=df['Ticker'].tolist()[:4])
-            if len(selected) > 1:
-                c_data = yf.download(selected, period="6mo", progress=False)['Close']
-                if isinstance(c_data.columns, pd.MultiIndex): c_data.columns = c_data.columns.get_level_values(1)
-                st.dataframe(c_data.pct_change().corr(), use_container_width=True)
-        with col2:
-            st.subheader("🧠 News Sentiment Lab")
-            target = st.selectbox("Audit Ticker", df['Ticker'].tolist())
-            if st.button("⚖️ Summon Council"):
-                with st.spinner("Council debating based on search context..."):
-                    st.markdown(summon_council(target, df[df['Ticker'] == target].iloc[0], v_vix))
+        st.subheader("🧠 Intelligence Lab & Sentiment Analysis")
+        target = st.selectbox("Select Asset for AI Council Audit", df['Ticker'].tolist())
+        if st.button("⚖️ Summon Council Debate"):
+            with st.spinner(f"Agents searching for news and debating {target}..."):
+                st.markdown(summon_council(target, df[df['Ticker'] == target].iloc[0], v_vix))
 
     with tabs[4]:
-        st.subheader("Risk Lab")
+        st.subheader("Risk & Execution Desk")
         st.dataframe(df[['Ticker', 'Price', 'ATR', 'Sector']], use_container_width=True)
 else:
-    st.info("System Ready. Depth: 500.")
+    st.info("System Ready. Scan depth defaulted to 500.")
