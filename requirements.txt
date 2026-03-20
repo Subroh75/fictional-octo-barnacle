@@ -3,3 +3,4 @@ pandas
 yfinance
 numpy<2.0.0
 google-generativeai
+matplotlib
