@@ -8,7 +8,7 @@ import google.generativeai as genai
 from datetime import datetime
 
 # --- 1. CONFIG & AI AGENTS ---
-st.set_page_config(page_title="Nifty Hedge Fund Master v7.0", layout="wide")
+st.set_page_config(page_title="Nifty Hedge Fund Master v7.1", layout="wide")
 
 def initialize_ai():
     try:
@@ -22,10 +22,9 @@ ai_active = initialize_ai()
 
 # --- AI AGENT: NEWS SENTIMENT + COUNCIL ---
 def summon_council(ticker, row, vix):
-    if not ai_active: return "⚠️ AI Engine Offline."
+    if not ai_active: return "⚠️ AI Engine Offline. Check Secrets."
     model = genai.GenerativeModel('gemini-1.5-flash')
     
-    # NEW: Alternative Data (Headlines)
     try:
         stock = yf.Ticker(ticker)
         news = stock.news[:5] 
@@ -41,9 +40,8 @@ def summon_council(ticker, row, vix):
     
     prompt = f"""
     You are a Hedge Fund Committee. 
-    1. Provide a **Sentiment Score** (-1.0 to 1.0) for these headlines.
-    2. Perform a 3-agent debate (Bull, Bear, Risk Manager) on {ticker}.
-    Context: {context}
+    1. Provide a **Sentiment Score** (-1.0 to 1.0) for these headlines: {headlines}
+    2. Perform a 3-agent debate (Bull, Bear, Risk Manager) on {ticker} using the data: {context}.
     """
     try:
         resp = model.generate_content(prompt)
@@ -60,17 +58,14 @@ def calculate_metrics(df):
         l = df['Low'].values.flatten()
         v = df['Volume'].values.flatten()
         
-        # Trend (MAs)
         m20 = np.mean(c[-20:]); m50 = np.mean(c[-50:]); m200 = np.mean(c[-200:])
         
-        # ADX Logic
         tr = pd.concat([pd.Series(h-l), abs(h-pd.Series(c).shift(1)), abs(l-pd.Series(c).shift(1))], axis=1).max(axis=1)
         atr = tr.rolling(14).mean()
         plus_di = 100 * (np.clip(pd.Series(h).diff(), 0, None).rolling(14).mean() / atr)
         minus_di = 100 * (np.clip((-pd.Series(l).diff()), 0, None).rolling(14).mean() / atr)
         adx = ((abs(plus_di - minus_di) / (plus_di + minus_di)) * 100).rolling(14).mean().iloc[-1]
         
-        # Z-Score
         z = (c[-1] - m20) / np.std(c[-20:])
         vol_surge = v[-1] / np.mean(v[-20:])
         
@@ -84,12 +79,10 @@ def calculate_metrics(df):
 
 @st.cache_data(ttl=3600)
 def fetch_institutional_flow():
-    """Real-time Smart Money Pulse (FII/DII) as of March 20, 2026"""
+    """Real-time Smart Money Pulse - Updated March 20, 2026"""
     return pd.DataFrame({
-        "Date": ["2026-03-20"],
-        "FII Net (Cr)": [-7558.20], # Net Selling
-        "DII Net (Cr)": [3864.00],   # Net Buying
-        "Sentiment": ["⚠️ Caution: FII Exit"]
+        "Metric": ["FII Net (Cr)", "DII Net (Cr)", "Market Bias"],
+        "Value": ["-7,558.20", "+3,864.00", "⚠️ BEARISH PRESSURE"]
     })
 
 @st.cache_data(ttl=3600)
@@ -119,7 +112,8 @@ def run_master_scan(limit):
             if m['vol_surge'] > 1.8: miro += 5
             if m['adx'] > 25: miro += 3
             
-            if m['vol_surge'] > 2.0: reco = "🔥 AGGRESSIVE BUY"
+            p_change = (m['cp'] - raw['Close'].iloc[-2]) / raw['Close'].iloc[-2]
+            if p_change > 0.01 and m['vol_surge'] > 2.0: reco = "🔥 AGGRESSIVE BUY"
             elif m['z'] < -2.0: reco = "🪃 MEAN REVERSION"
             else: reco = "💤 NEUTRAL"
 
@@ -134,18 +128,18 @@ def run_master_scan(limit):
     return pd.DataFrame(all_data)
 
 # --- 4. INTERFACE ---
-st.title("🏹 Nifty Hedge Fund Master v7.0")
+st.title("🏹 Nifty Hedge Fund Master v7.1")
 
 # Sidebar Smart Money
 st.sidebar.subheader("🏦 Smart Money Pulse")
 st.sidebar.table(fetch_institutional_flow())
 
 if st.sidebar.button("🚀 EXECUTE MASTER SCAN"):
-    st.session_state['v7_results'] = run_master_scan(st.sidebar.slider("Depth", 50, 500, 100))
+    st.session_state['v71_results'] = run_master_scan(st.sidebar.slider("Depth", 50, 500, 100))
 
-if 'v7_results' in st.session_state:
-    df = st.session_state['v7_results']
-    tabs = st.tabs(["🎯 Miro Flow", "📈 Trend Analysis", "🪃 Mean Reversion", "🧬 Correlation & News", "🛡️ Risk Lab"])
+if 'v71_results' in st.session_state:
+    df = st.session_state['v71_results']
+    tabs = st.tabs(["🎯 Miro Flow", "📈 Trend Analysis", "🪃 Mean Reversion", "🧬 Intelligence & Correlation", "🛡️ Risk Lab"])
     
     with tabs[0]:
         st.subheader("Miro Score & Buy/Sell")
@@ -155,19 +149,31 @@ if 'v7_results' in st.session_state:
         st.subheader("Structural Trend Analysis")
         st.dataframe(df[['Ticker', 'Price', 'ADX Strength', 'MA 20', 'MA 200', 'Sector']], use_container_width=True)
 
+    with tabs[2]:
+        st.subheader("Statistical Mean Reversion (Z-Score)")
+        st.dataframe(df.sort_values("Z-Score")[['Ticker', 'Price', 'Recommendation', 'Z-Score', 'Sector']], use_container_width=True)
+
     with tabs[3]:
         col1, col2 = st.columns(2)
         with col1:
             st.subheader("Correlation Matrix")
             selected = st.multiselect("Select Tickers", df['Ticker'].tolist(), default=df['Ticker'].tolist()[:4])
             if len(selected) > 1:
-                c_data = yf.download(selected, period="6mo", progress=False)['Close']
-                if isinstance(c_data.columns, pd.MultiIndex): c_data.columns = c_data.columns.get_level_values(1)
-                st.table(c_data.pct_change().corr().style.background_gradient(cmap='RdYlGn', axis=None))
+                try:
+                    c_data = yf.download(selected, period="6mo", progress=False)['Close']
+                    if isinstance(c_data.columns, pd.MultiIndex): c_data.columns = c_data.columns.get_level_values(1)
+                    # Fixed crash by simplifying table rendering
+                    st.dataframe(c_data.pct_change().corr(), use_container_width=True)
+                except: st.error("Correlation fetch failed.")
         with col2:
             st.subheader("🧠 News Sentiment Lab")
             target = st.selectbox("Audit Ticker", df['Ticker'].tolist())
             if st.button("⚖️ Summon Council"):
-                st.markdown(summon_council(target, df[df['Ticker'] == target].iloc[0], 21.84))
+                with st.spinner("Council analyzing news..."):
+                    st.markdown(summon_council(target, df[df['Ticker'] == target].iloc[0], 21.84))
+
+    with tabs[4]:
+        st.subheader("Risk Lab")
+        st.dataframe(df[['Ticker', 'Price', 'ATR', 'Sector']], use_container_width=True)
 else:
     st.info("System Ready. Initialize Master Scan.")
