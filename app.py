@@ -8,7 +8,7 @@ import google.generativeai as genai
 from datetime import datetime
 
 # --- 1. CONFIG & AI AGENTS ---
-st.set_page_config(page_title="Nifty Sniper Elite v5.7", layout="wide")
+st.set_page_config(page_title="Nifty Sniper Elite v5.8", layout="wide")
 
 def initialize_ai():
     try:
@@ -23,39 +23,42 @@ ai_active = initialize_ai()
 # --- AI AGENT: THE SUPREME COUNCIL ---
 def summon_council(ticker, row, vix):
     if not ai_active: 
-        return "⚠️ AI Engine Offline. Check Streamlit Secrets."
+        return "⚠️ AI Engine Offline. Please check your Streamlit Secrets for GEMINI_API_KEY."
     
-    # Updated to 1.5-flash for better stability and quota
-    model = genai.GenerativeModel('gemini-1.5-flash')
-    now = datetime.now().strftime("%B %d, %Y")
-    
-    context = f"""
-    Ticker: {ticker} | Price: {row['Price']} 
-    Signal: {row['Signal']} | Miro_Score: {row['Miro_Score']}
-    ADX Strength: {row['ADX Strength']} | Vol_Surge: {row['Vol_Surge']}
-    VIX: {vix} | Trend: {row['Trend']} | Sector: {row['Sector']}
-    """
-    
-    prompt = f"""
-    You are a Hedge Fund Investment Committee. Perform a 3-agent debate:
-    1. **The Bull:** Argue for the 'Aggressive Buy' based on momentum and volume.
-    2. **The Bear:** Look for institutional traps, overextension, or macro headwinds.
-    3. **The Risk Manager:** Set a hard stop-loss and position size for VIX {vix}.
-    
-    Data: {context}
-    """
+    # Using the most stable model path to avoid 404 errors
     try:
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        now = datetime.now().strftime("%B %d, %Y")
+        
+        context = f"""
+        Ticker: {ticker} | Price: {row['Price']} 
+        Signal: {row['Signal']} | Miro_Score: {row['Miro_Score']}
+        ADX Strength: {row['ADX Strength']} | Vol_Surge: {row['Vol_Surge']}
+        VIX: {vix} | Trend: {row['Trend']} | Sector: {row['Sector']}
+        """
+        
+        prompt = f"""
+        You are a Hedge Fund Investment Committee. Perform a 3-agent debate:
+        1. **The Bull:** Argue for the 'Aggressive Buy' based on momentum and volume.
+        2. **The Bear:** Look for institutional traps, overextension, or macro headwinds.
+        3. **The Risk Manager:** Set a hard stop-loss and position size for VIX {vix}.
+        
+        Data: {context}
+        """
+        
         resp = model.generate_content(prompt)
         return resp.text
     except Exception as e:
         if "429" in str(e):
             return "🕒 Council is exhausted (Rate Limit). Please wait 60 seconds and try again."
-        return f"Council is currently in recess: {e}"
+        if "404" in str(e):
+            return "❌ AI Model Path Error. The system is currently undergoing a model handshake update."
+        return f"Council is currently in recess (Status: {e})"
 
 # --- 2. THE NATIVE MATH ENGINE (ADX & INDICATORS) ---
 
 def calculate_adx_native(df, period=14):
-    """Calculates ADX and returns a single Strength String"""
+    """Calculates ADX and returns a single Strength String with NaN protection"""
     try:
         if len(df) < 30: return "CHOPPY (NaN)"
         
@@ -91,14 +94,16 @@ def run_master_scan(limit):
         sector_map = {s: "Misc" for s in symbols}
 
     all_data = []
-    prog = st.progress(0, text="Snipering Nifty 500 Depth...")
+    prog = st.progress(0, text="Snipering Nifty 500 Market Depth...")
     
     for i, t in enumerate(symbols[:limit]):
         prog.progress((i + 1) / limit)
         try:
+            # We pull 2 years of data to ensure MAs and ADX are perfectly calculated
             raw = yf.download(t, period="2y", progress=False, auto_adjust=True)
             if raw.empty or len(raw) < 50: continue
             
+            # THE 2026 MULTI-INDEX FIX: Ensures data columns are correctly mapped
             if isinstance(raw.columns, pd.MultiIndex):
                 raw.columns = raw.columns.get_level_values(0)
             
@@ -106,14 +111,17 @@ def run_master_scan(limit):
             v = raw['Volume'].values.flatten()
             cp = float(c[-1])
 
+            # Trend ribbon calculations (Native Math)
             m20 = np.mean(c[-20:])
             m50 = np.mean(c[-50:])
             m200 = np.mean(c[-200:]) if len(c) >= 200 else np.mean(c)
             
+            # ADX & Risk Data
             adx_str = calculate_adx_native(raw)
             tr = pd.concat([raw['High']-raw['Low'], abs(raw['High']-raw['Close'].shift(1))], axis=1).max(axis=1)
             atr = tr.tail(14).mean()
 
+            # Miro Score & Institutional Flow Logic
             vol_surge = v[-1] / np.mean(v[-20:])
             p_change = (cp - c[-2]) / c[-2]
             
@@ -122,6 +130,7 @@ def run_master_scan(limit):
             if p_change > 0.02: miro_score += 3
             if "STRONG" in adx_str: miro_score += 2
 
+            # Defining Institutional Signals
             if p_change > 0.01 and vol_surge > 2.0: signal = "🔥 AGGRESSIVE BUY"
             elif p_change < -0.01 and vol_surge > 2.0: signal = "⚠️ INST. EXIT"
             elif p_change > 0 and vol_surge > 1.2: signal = "💎 ACCUMULATE"
@@ -139,7 +148,7 @@ def run_master_scan(limit):
     return pd.DataFrame(all_data)
 
 # --- 4. INTERFACE ---
-st.title("🏹 Nifty Sniper Elite v5.7")
+st.title("🏹 Nifty Sniper Elite v5.8")
 st.sidebar.header("Sniper Control Panel")
 v_vix = st.sidebar.number_input("India VIX", value=21.84)
 v_depth = st.sidebar.slider("Scan Depth", 50, 500, 100)
@@ -149,6 +158,7 @@ if st.sidebar.button("🚀 INITIALIZE MASTER SCAN"):
     st.cache_data.clear()
     res = run_master_scan(v_depth)
     if not res.empty:
+        # VIX Adaptive Risk logic: Wider stops for higher volatility
         sl_mult = 3.0 if v_vix > 20 else 2.0
         res['Stop_Loss'] = res['Price'] - (sl_mult * res['ATR'])
         res['Qty'] = (risk_amt / (res['Price'] - res['Stop_Loss'])).replace([np.inf, -np.inf], 0).fillna(0).astype(int)
@@ -179,4 +189,4 @@ if 'full_results' in st.session_state:
                 debate_output = summon_council(target, df[df['Ticker'] == target].iloc[0], v_vix)
                 st.markdown(debate_output)
 else:
-    st.info("System Ready. Click 'INITIALIZE MASTER SCAN' in the sidebar.")
+    st.info("System Ready. Click 'INITIALIZE MASTER SCAN' in the sidebar to begin.")
