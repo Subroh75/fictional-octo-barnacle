@@ -8,7 +8,7 @@ import google.generativeai as genai
 from datetime import datetime
 
 # --- 1. CONFIG & AI AGENTS ---
-st.set_page_config(page_title="Nifty Hedge Fund Master v7.1", layout="wide")
+st.set_page_config(page_title="Nifty Hedge Fund Master v7.1.1", layout="wide")
 
 def initialize_ai():
     try:
@@ -35,13 +35,13 @@ def summon_council(ticker, row, vix):
     Ticker: {ticker} | Price: {row['Price']} | VIX: {vix}
     Signal: {row['Recommendation']} | Miro_Score: {row['Miro_Score']}
     ADX: {row['ADX Strength']} | Z-Score: {row['Z-Score']}
-    News Headlines: {headlines}
+    Headlines: {headlines}
     """
     
     prompt = f"""
     You are a Hedge Fund Committee. 
-    1. Provide a **Sentiment Score** (-1.0 to 1.0) for these headlines: {headlines}
-    2. Perform a 3-agent debate (Bull, Bear, Risk Manager) on {ticker} using the data: {context}.
+    1. Provide a **Sentiment Score** (-1.0 to 1.0) for these headlines.
+    2. Perform a 3-agent debate (Bull, Bear, Risk Manager) on {ticker} using: {context}.
     """
     try:
         resp = model.generate_content(prompt)
@@ -58,8 +58,10 @@ def calculate_metrics(df):
         l = df['Low'].values.flatten()
         v = df['Volume'].values.flatten()
         
+        # MAs
         m20 = np.mean(c[-20:]); m50 = np.mean(c[-50:]); m200 = np.mean(c[-200:])
         
+        # ADX
         tr = pd.concat([pd.Series(h-l), abs(h-pd.Series(c).shift(1)), abs(l-pd.Series(c).shift(1))], axis=1).max(axis=1)
         atr = tr.rolling(14).mean()
         plus_di = 100 * (np.clip(pd.Series(h).diff(), 0, None).rolling(14).mean() / atr)
@@ -79,7 +81,6 @@ def calculate_metrics(df):
 
 @st.cache_data(ttl=3600)
 def fetch_institutional_flow():
-    """Real-time Smart Money Pulse - Updated March 20, 2026"""
     return pd.DataFrame({
         "Metric": ["FII Net (Cr)", "DII Net (Cr)", "Market Bias"],
         "Value": ["-7,558.20", "+3,864.00", "⚠️ BEARISH PRESSURE"]
@@ -121,25 +122,25 @@ def run_master_scan(limit):
                 "Ticker": t, "Sector": sector_map.get(t, "Misc"), "Price": round(m['cp'], 2),
                 "Recommendation": reco, "Miro_Score": miro, "Z-Score": m['z'], 
                 "ADX Strength": f"🔥 {round(m['adx'],1)}" if m['adx'] > 25 else f"💤 {round(m['adx'],1)}",
-                "Vol_Surge": m['vol_surge'], "MA 20": round(m['m20'], 2), "MA 200": round(m['m200'], 2),
+                "Vol_Surge": m['vol_surge'], "MA 20": round(m['m20'], 2), "MA 50": round(m['m50'], 2), "MA 200": round(m['m200'], 2),
                 "ATR": round(m['atr'], 2)
             })
         except: continue
     return pd.DataFrame(all_data)
 
 # --- 4. INTERFACE ---
-st.title("🏹 Nifty Hedge Fund Master v7.1")
+st.title("🏹 Nifty Hedge Fund Master v7.1.1")
 
 # Sidebar Smart Money
 st.sidebar.subheader("🏦 Smart Money Pulse")
 st.sidebar.table(fetch_institutional_flow())
 
 if st.sidebar.button("🚀 EXECUTE MASTER SCAN"):
-    st.session_state['v71_results'] = run_master_scan(st.sidebar.slider("Depth", 50, 500, 100))
+    st.session_state['v711_results'] = run_master_scan(st.sidebar.slider("Depth", 50, 500, 100))
 
-if 'v71_results' in st.session_state:
-    df = st.session_state['v71_results']
-    tabs = st.tabs(["🎯 Miro Flow", "📈 Trend Analysis", "🪃 Mean Reversion", "🧬 Intelligence & Correlation", "🛡️ Risk Lab"])
+if 'v711_results' in st.session_state:
+    df = st.session_state['v711_results']
+    tabs = st.tabs(["🎯 Miro Flow", "📈 Trend Analysis", "🪃 Mean Reversion", "🧬 Intel & Correlation", "🛡️ Risk Lab"])
     
     with tabs[0]:
         st.subheader("Miro Score & Buy/Sell")
@@ -147,7 +148,8 @@ if 'v71_results' in st.session_state:
     
     with tabs[1]:
         st.subheader("Structural Trend Analysis")
-        st.dataframe(df[['Ticker', 'Price', 'ADX Strength', 'MA 20', 'MA 200', 'Sector']], use_container_width=True)
+        # RESTORED MA 50 COLUMN HERE
+        st.dataframe(df[['Ticker', 'Price', 'ADX Strength', 'MA 20', 'MA 50', 'MA 200', 'Sector']], use_container_width=True)
 
     with tabs[2]:
         st.subheader("Statistical Mean Reversion (Z-Score)")
@@ -162,7 +164,6 @@ if 'v71_results' in st.session_state:
                 try:
                     c_data = yf.download(selected, period="6mo", progress=False)['Close']
                     if isinstance(c_data.columns, pd.MultiIndex): c_data.columns = c_data.columns.get_level_values(1)
-                    # Fixed crash by simplifying table rendering
                     st.dataframe(c_data.pct_change().corr(), use_container_width=True)
                 except: st.error("Correlation fetch failed.")
         with col2:
