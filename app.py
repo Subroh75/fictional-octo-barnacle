@@ -8,7 +8,7 @@ import google.generativeai as genai
 from datetime import datetime
 
 # --- 1. CONFIG & AI AGENTS ---
-st.set_page_config(page_title="Nifty Hedge Fund Master v7.1.1", layout="wide")
+st.set_page_config(page_title="Nifty Hedge Fund Master v7.1.2", layout="wide")
 
 def initialize_ai():
     try:
@@ -41,7 +41,7 @@ def summon_council(ticker, row, vix):
     prompt = f"""
     You are a Hedge Fund Committee. 
     1. Provide a **Sentiment Score** (-1.0 to 1.0) for these headlines.
-    2. Perform a 3-agent debate (Bull, Bear, Risk Manager) on {ticker} using: {context}.
+    2. Perform a 3-agent debate (Bull, Bear, Risk Manager) on {ticker} using the data: {context}.
     """
     try:
         resp = model.generate_content(prompt)
@@ -58,10 +58,9 @@ def calculate_metrics(df):
         l = df['Low'].values.flatten()
         v = df['Volume'].values.flatten()
         
-        # MAs
+        # Indicators
         m20 = np.mean(c[-20:]); m50 = np.mean(c[-50:]); m200 = np.mean(c[-200:])
         
-        # ADX
         tr = pd.concat([pd.Series(h-l), abs(h-pd.Series(c).shift(1)), abs(l-pd.Series(c).shift(1))], axis=1).max(axis=1)
         atr = tr.rolling(14).mean()
         plus_di = 100 * (np.clip(pd.Series(h).diff(), 0, None).rolling(14).mean() / atr)
@@ -98,7 +97,7 @@ def run_master_scan(limit):
         sector_map = {s: "Misc" for s in symbols}
 
     all_data = []
-    prog = st.progress(0, text="Deep Market Audit...")
+    prog = st.progress(0, text=f"Deep Market Audit ({limit} Assets)...")
     for i, t in enumerate(symbols[:limit]):
         prog.progress((i + 1) / limit)
         try:
@@ -129,17 +128,21 @@ def run_master_scan(limit):
     return pd.DataFrame(all_data)
 
 # --- 4. INTERFACE ---
-st.title("🏹 Nifty Hedge Fund Master v7.1.1")
+st.title("🏹 Nifty Hedge Fund Master v7.1.2")
 
-# Sidebar Smart Money
+# Sidebar
 st.sidebar.subheader("🏦 Smart Money Pulse")
 st.sidebar.table(fetch_institutional_flow())
 
-if st.sidebar.button("🚀 EXECUTE MASTER SCAN"):
-    st.session_state['v711_results'] = run_master_scan(st.sidebar.slider("Depth", 50, 500, 100))
+# UPDATED SLIDER: Default and Max both set to 500
+v_depth = st.sidebar.slider("Scan Depth", 50, 500, 500)
+v_vix = st.sidebar.number_input("India VIX", value=21.84)
 
-if 'v711_results' in st.session_state:
-    df = st.session_state['v711_results']
+if st.sidebar.button("🚀 EXECUTE MASTER SCAN"):
+    st.session_state['v712_results'] = run_master_scan(v_depth)
+
+if 'v712_results' in st.session_state:
+    df = st.session_state['v712_results']
     tabs = st.tabs(["🎯 Miro Flow", "📈 Trend Analysis", "🪃 Mean Reversion", "🧬 Intel & Correlation", "🛡️ Risk Lab"])
     
     with tabs[0]:
@@ -148,7 +151,6 @@ if 'v711_results' in st.session_state:
     
     with tabs[1]:
         st.subheader("Structural Trend Analysis")
-        # RESTORED MA 50 COLUMN HERE
         st.dataframe(df[['Ticker', 'Price', 'ADX Strength', 'MA 20', 'MA 50', 'MA 200', 'Sector']], use_container_width=True)
 
     with tabs[2]:
@@ -171,7 +173,7 @@ if 'v711_results' in st.session_state:
             target = st.selectbox("Audit Ticker", df['Ticker'].tolist())
             if st.button("⚖️ Summon Council"):
                 with st.spinner("Council analyzing news..."):
-                    st.markdown(summon_council(target, df[df['Ticker'] == target].iloc[0], 21.84))
+                    st.markdown(summon_council(target, df[df['Ticker'] == target].iloc[0], v_vix))
 
     with tabs[4]:
         st.subheader("Risk Lab")
