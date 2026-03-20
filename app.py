@@ -8,7 +8,7 @@ import google.generativeai as genai
 from datetime import datetime
 
 # --- 1. CONFIG & AI AGENTS ---
-st.set_page_config(page_title="Nifty Sniper Elite v5.4", layout="wide")
+st.set_page_config(page_title="Nifty Sniper Elite v5.6", layout="wide")
 
 def initialize_ai():
     try:
@@ -29,13 +29,13 @@ def summon_council(ticker, row, vix):
     Ticker: {ticker} | Price: {row['Price']} 
     Signal: {row['Signal']} | Miro_Score: {row['Miro_Score']}
     ADX Strength: {row['ADX Strength']} | Vol_Surge: {row['Vol_Surge']}
-    VIX: {vix} | Trend: {row['Trend']}
+    VIX: {vix} | Trend: {row['Trend']} | Sector: {row['Sector']}
     """
     
     prompt = f"""
     You are a Hedge Fund Investment Committee. Perform a 3-agent debate:
-    1. **The Bull:** Argue for the 'Aggressive Buy' based on momentum.
-    2. **The Bear:** Look for institutional traps or overextension.
+    1. **The Bull:** Argue for the 'Aggressive Buy' based on momentum and volume.
+    2. **The Bear:** Look for institutional traps, overextension, or macro headwinds.
     3. **The Risk Manager:** Set a hard stop-loss and position size for VIX {vix}.
     
     Data: {context}
@@ -49,23 +49,29 @@ def summon_council(ticker, row, vix):
 # --- 2. THE NATIVE MATH ENGINE (ADX & INDICATORS) ---
 
 def calculate_adx_native(df, period=14):
-    """Calculates ADX and returns a single Strength String"""
+    """Calculates ADX and returns a single Strength String with NaN handling"""
     try:
+        if len(df) < 30: return "CHOPPY (NaN)"
+        
         high, low, close = df['High'], df['Low'], df['Close']
-        plus_dm = high.diff(); minus_dm = low.diff()
-        plus_dm = np.where((plus_dm > minus_dm) & (plus_dm > 0), plus_dm, 0)
-        minus_dm = np.where((minus_dm > plus_dm) & (minus_dm > 0), minus_dm, 0)
+        plus_dm = high.diff().clip(lower=0)
+        minus_dm = (-low.diff()).clip(lower=0)
+        
+        # True Range
         tr = pd.concat([high-low, abs(high-close.shift(1)), abs(low-close.shift(1))], axis=1).max(axis=1)
+        # Using Wilder's Smoothing approach
         atr = tr.rolling(period).mean()
-        plus_di = 100 * (pd.Series(plus_dm).rolling(period).mean() / atr)
-        minus_di = 100 * (pd.Series(minus_dm).rolling(period).mean() / atr)
+        
+        plus_di = 100 * (plus_dm.rolling(period).mean() / atr)
+        minus_di = 100 * (minus_dm.rolling(period).mean() / atr)
         dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
         adx = dx.rolling(period).mean().iloc[-1]
         
+        if pd.isna(adx): return "CHOPPY (NaN)"
         if adx > 25: return f"🔥 STRONG ({round(adx,1)})"
         if adx > 20: return f"⚡ BUILDING ({round(adx,1)})"
-        return f"💤 CHOPPY ({round(adx,1)})"
-    except: return "N/A"
+        return f"💤 WEAK ({round(adx,1)})"
+    except: return "CHOPPY (NaN)"
 
 # --- 3. MASTER DATA ENGINE ---
 
@@ -86,10 +92,11 @@ def run_master_scan(limit):
     for i, t in enumerate(symbols[:limit]):
         prog.progress((i + 1) / limit)
         try:
-            raw = yf.download(t, period="1y", progress=False, auto_adjust=True)
-            if raw.empty: continue
+            # Pull 2 years to ensure enough data for ADX and MA200
+            raw = yf.download(t, period="2y", progress=False, auto_adjust=True)
+            if raw.empty or len(raw) < 50: continue
             
-            # --- THE 2026 MULTI-INDEX FIX ---
+            # THE 2026 MULTI-INDEX FIX
             if isinstance(raw.columns, pd.MultiIndex):
                 raw.columns = raw.columns.get_level_values(0)
             
@@ -116,7 +123,7 @@ def run_master_scan(limit):
             if p_change > 0.02: miro_score += 3
             if "STRONG" in adx_str: miro_score += 2
 
-            # Signal Logic
+            # Institutional Signal Logic
             if p_change > 0.01 and vol_surge > 2.0: signal = "🔥 AGGRESSIVE BUY"
             elif p_change < -0.01 and vol_surge > 2.0: signal = "⚠️ INST. EXIT"
             elif p_change > 0 and vol_surge > 1.2: signal = "💎 ACCUMULATE"
@@ -134,7 +141,8 @@ def run_master_scan(limit):
     return pd.DataFrame(all_data)
 
 # --- 4. INTERFACE ---
-st.sidebar.title("🏹 Nifty Sniper Elite v5.4")
+st.title("🏹 Nifty Sniper Elite v5.6")
+st.sidebar.header("Sniper Control Panel")
 v_vix = st.sidebar.number_input("India VIX", value=21.84)
 v_depth = st.sidebar.slider("Scan Depth", 50, 500, 100)
 risk_amt = st.sidebar.number_input("Risk Amount (INR)", value=5000)
@@ -143,7 +151,7 @@ if st.sidebar.button("🚀 INITIALIZE MASTER SCAN"):
     st.cache_data.clear()
     res = run_master_scan(v_depth)
     if not res.empty:
-        # VIX Adaptive Risk
+        # VIX Adaptive Risk logic
         sl_mult = 3.0 if v_vix > 20 else 2.0
         res['Stop_Loss'] = res['Price'] - (sl_mult * res['ATR'])
         res['Qty'] = (risk_amt / (res['Price'] - res['Stop_Loss'])).replace([np.inf, -np.inf], 0).fillna(0).astype(int)
@@ -156,7 +164,7 @@ if 'full_results' in st.session_state:
     
     with tabs[0]:
         st.subheader("Institutional Flow & Miro Score")
-        st.dataframe(df.sort_values("Miro_Score", ascending=False)[['Ticker', 'Signal', 'Miro_Score', 'Vol_Surge', 'Price']], use_container_width=True)
+        st.dataframe(df.sort_values("Miro_Score", ascending=False)[['Ticker', 'Signal', 'Miro_Score', 'Vol_Surge', 'Price', 'Sector']], use_container_width=True)
     
     with tabs[1]:
         st.subheader("Structural Ribbon (20/50/200)")
@@ -168,9 +176,10 @@ if 'full_results' in st.session_state:
         
     with tabs[3]:
         st.subheader("🧬 Intelligence Lab (AI Council)")
-        target = st.selectbox("Analyze Ticker", df['Ticker'].tolist())
+        target = st.selectbox("Select Ticker for AI Audit", df['Ticker'].tolist())
         if st.button("⚖️ Summon Council Debate"):
             with st.spinner(f"Agents are debating {target}..."):
-                st.markdown(summon_council(target, df[df['Ticker'] == target].iloc[0], v_vix))
+                debate_output = summon_council(target, df[df['Ticker'] == target].iloc[0], v_vix)
+                st.markdown(debate_output)
 else:
-    st.info("System Ready. Click 'INITIALIZE MASTER SCAN'.")
+    st.info("System Ready. Click 'INITIALIZE MASTER SCAN' in the sidebar.")
