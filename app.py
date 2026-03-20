@@ -8,7 +8,7 @@ import google.generativeai as genai
 from datetime import datetime
 
 # --- 1. CONFIG & AI AGENTS ---
-st.set_page_config(page_title="Nifty Hedge Fund Master v7.1.2", layout="wide")
+st.set_page_config(page_title="Nifty Hedge Fund Master v7.2", layout="wide")
 
 def initialize_ai():
     try:
@@ -23,7 +23,9 @@ ai_active = initialize_ai()
 # --- AI AGENT: NEWS SENTIMENT + COUNCIL ---
 def summon_council(ticker, row, vix):
     if not ai_active: return "⚠️ AI Engine Offline. Check Secrets."
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    
+    # 2026 Fail-Safe: Try 2.5 Flash, then 3.0 Flash as backup
+    models_to_try = ['gemini-2.5-flash', 'gemini-3-flash-preview']
     
     try:
         stock = yf.Ticker(ticker)
@@ -31,23 +33,18 @@ def summon_council(ticker, row, vix):
         headlines = [n['title'] for n in news] if news else ["No recent news found."]
     except: headlines = ["News retrieval failed."]
 
-    context = f"""
-    Ticker: {ticker} | Price: {row['Price']} | VIX: {vix}
-    Signal: {row['Recommendation']} | Miro_Score: {row['Miro_Score']}
-    ADX: {row['ADX Strength']} | Z-Score: {row['Z-Score']}
-    Headlines: {headlines}
-    """
-    
-    prompt = f"""
-    You are a Hedge Fund Committee. 
-    1. Provide a **Sentiment Score** (-1.0 to 1.0) for these headlines.
-    2. Perform a 3-agent debate (Bull, Bear, Risk Manager) on {ticker} using the data: {context}.
-    """
-    try:
-        resp = model.generate_content(prompt)
-        return resp.text
-    except Exception as e:
-        return f"Council is in recess: {e}"
+    context = f"Ticker: {ticker} | Price: {row['Price']} | VIX: {vix} | Headlines: {headlines}"
+    prompt = f"Perform a 3-agent debate (Bull, Bear, Risk Manager) for {ticker}. Analyze sentiment of: {headlines}. Data: {context}"
+
+    for model_name in models_to_try:
+        try:
+            model = genai.GenerativeModel(model_name)
+            resp = model.generate_content(prompt)
+            return resp.text
+        except Exception as e:
+            if model_name == models_to_try[-1]: # If last model also fails
+                return f"Council is in recess: {e}"
+            continue
 
 # --- 2. HEDGE FUND MATH ENGINE ---
 
@@ -58,7 +55,6 @@ def calculate_metrics(df):
         l = df['Low'].values.flatten()
         v = df['Volume'].values.flatten()
         
-        # Indicators
         m20 = np.mean(c[-20:]); m50 = np.mean(c[-50:]); m200 = np.mean(c[-200:])
         
         tr = pd.concat([pd.Series(h-l), abs(h-pd.Series(c).shift(1)), abs(l-pd.Series(c).shift(1))], axis=1).max(axis=1)
@@ -76,7 +72,7 @@ def calculate_metrics(df):
         }
     except: return None
 
-# --- 3. SMART MONEY & DATA ENGINE ---
+# --- 3. DATA ENGINE ---
 
 @st.cache_data(ttl=3600)
 def fetch_institutional_flow():
@@ -97,7 +93,7 @@ def run_master_scan(limit):
         sector_map = {s: "Misc" for s in symbols}
 
     all_data = []
-    prog = st.progress(0, text=f"Deep Market Audit ({limit} Assets)...")
+    prog = st.progress(0, text=f"Scanning {limit} Assets...")
     for i, t in enumerate(symbols[:limit]):
         prog.progress((i + 1) / limit)
         try:
@@ -128,25 +124,22 @@ def run_master_scan(limit):
     return pd.DataFrame(all_data)
 
 # --- 4. INTERFACE ---
-st.title("🏹 Nifty Hedge Fund Master v7.1.2")
+st.title("🏹 Nifty Hedge Fund Master v7.2")
 
-# Sidebar
 st.sidebar.subheader("🏦 Smart Money Pulse")
 st.sidebar.table(fetch_institutional_flow())
-
-# UPDATED SLIDER: Default and Max both set to 500
 v_depth = st.sidebar.slider("Scan Depth", 50, 500, 500)
 v_vix = st.sidebar.number_input("India VIX", value=21.84)
 
 if st.sidebar.button("🚀 EXECUTE MASTER SCAN"):
-    st.session_state['v712_results'] = run_master_scan(v_depth)
+    st.session_state['v72_results'] = run_master_scan(v_depth)
 
-if 'v712_results' in st.session_state:
-    df = st.session_state['v712_results']
+if 'v72_results' in st.session_state:
+    df = st.session_state['v72_results']
     tabs = st.tabs(["🎯 Miro Flow", "📈 Trend Analysis", "🪃 Mean Reversion", "🧬 Intel & Correlation", "🛡️ Risk Lab"])
     
     with tabs[0]:
-        st.subheader("Miro Score & Buy/Sell")
+        st.subheader("Miro Score Leaderboard")
         st.dataframe(df.sort_values("Miro_Score", ascending=False)[['Ticker', 'Price', 'Recommendation', 'Miro_Score', 'Vol_Surge']], use_container_width=True)
     
     with tabs[1]:
@@ -163,11 +156,9 @@ if 'v712_results' in st.session_state:
             st.subheader("Correlation Matrix")
             selected = st.multiselect("Select Tickers", df['Ticker'].tolist(), default=df['Ticker'].tolist()[:4])
             if len(selected) > 1:
-                try:
-                    c_data = yf.download(selected, period="6mo", progress=False)['Close']
-                    if isinstance(c_data.columns, pd.MultiIndex): c_data.columns = c_data.columns.get_level_values(1)
-                    st.dataframe(c_data.pct_change().corr(), use_container_width=True)
-                except: st.error("Correlation fetch failed.")
+                c_data = yf.download(selected, period="6mo", progress=False)['Close']
+                if isinstance(c_data.columns, pd.MultiIndex): c_data.columns = c_data.columns.get_level_values(1)
+                st.dataframe(c_data.pct_change().corr(), use_container_width=True)
         with col2:
             st.subheader("🧠 News Sentiment Lab")
             target = st.selectbox("Audit Ticker", df['Ticker'].tolist())
@@ -179,4 +170,4 @@ if 'v712_results' in st.session_state:
         st.subheader("Risk Lab")
         st.dataframe(df[['Ticker', 'Price', 'ATR', 'Sector']], use_container_width=True)
 else:
-    st.info("System Ready. Initialize Master Scan.")
+    st.info("System Ready. Scan depth defaulted to 500.")
