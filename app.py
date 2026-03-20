@@ -8,7 +8,7 @@ import google.generativeai as genai
 from datetime import datetime
 
 # --- 1. CONFIG & AI AGENTS ---
-st.set_page_config(page_title="Nifty Sniper Elite v6.2", layout="wide")
+st.set_page_config(page_title="Nifty Sniper Elite v6.3", layout="wide")
 
 def initialize_ai():
     try:
@@ -26,19 +26,18 @@ def summon_council(ticker, row, vix):
         return "⚠️ AI Engine Offline. Check Streamlit Secrets."
     
     model = genai.GenerativeModel('gemini-1.5-flash')
-    now = datetime.now().strftime("%B %d, %Y")
     
     context = f"""
     Ticker: {ticker} | Price: {row['Price']} 
-    Miro_Score: {row['Miro_Score']} | Vol_Surge: {row['Vol_Surge']}
-    ADX Strength: {row['ADX Strength']} | Trend Status: {row['Trend Status']}
-    VIX: {vix} | Sector: {row['Sector']}
+    Miro_Score: {row['Miro_Score']} | Recommendation: {row['Recommendation']}
+    ADX Strength: {row['ADX Strength']} | Vol_Surge: {row['Vol_Surge']}
+    VIX: {vix} | MA 200: {row['MA 200']}
     """
     
     prompt = f"""
     You are a Hedge Fund Committee. Perform a 3-agent debate:
-    1. **The Bull:** Argue for the 'Miro Momentum' case.
-    2. **The Bear:** Look for overextension or high VIX ({vix}) traps.
+    1. **The Bull:** Argue for the '{row['Recommendation']}' case.
+    2. **The Bear:** Look for institutional traps or high VIX ({vix}) fakeouts.
     3. **The Risk Manager:** Set a hard stop-loss and position size.
     
     Data: {context}
@@ -52,28 +51,21 @@ def summon_council(ticker, row, vix):
 # --- 2. NATIVE MATH ENGINE ---
 
 def calculate_adx_native(df, period=14):
-    """Calculates ADX and returns a single Strength String"""
     try:
         if len(df) < 30: return "CHOPPY (NaN)", 0
-        
         high, low, close = df['High'], df['Low'], df['Close']
         plus_dm = high.diff().clip(lower=0)
         minus_dm = (-low.diff()).clip(lower=0)
-        
         tr = pd.concat([high-low, abs(high-close.shift(1)), abs(low-close.shift(1))], axis=1).max(axis=1)
         atr = tr.rolling(period).mean()
-        
         plus_di = 100 * (pd.Series(plus_dm).rolling(period).mean() / atr)
-        minus_di = 100 * (pd.Series(minus_dm).rolling(period).mean() / atr)
+        minus_di = 100 * (minus_dm.rolling(period).mean() / atr)
         dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
         adx = dx.rolling(period).mean().iloc[-1]
-        
-        if pd.isna(adx): return "CHOPPY (NaN)", 0
         
         label = f"💤 WEAK ({round(adx,1)})"
         if adx > 20: label = f"⚡ BUILDING ({round(adx,1)})"
         if adx > 25: label = f"🔥 STRONG ({round(adx,1)})"
-        
         return label, adx
     except: return "CHOPPY (NaN)", 0
 
@@ -87,32 +79,28 @@ def run_master_scan(limit):
         symbols = [s + ".NS" for s in n500['Symbol'].tolist()]
         sector_map = dict(zip(n500['Symbol'] + ".NS", n500['Industry']))
     except:
-        symbols = ["RELIANCE.NS", "TCS.NS", "ATHERENERG.NS", "360ONE.NS"]
+        symbols = ["RELIANCE.NS", "TCS.NS", "360ONE.NS"]
         sector_map = {s: "Misc" for s in symbols}
 
     all_data = []
-    prog = st.progress(0, text="Snipering Nifty 500 Market Depth...")
+    prog = st.progress(0, text="Snipering Nifty 500 Depth...")
     
     for i, t in enumerate(symbols[:limit]):
         prog.progress((i + 1) / limit)
         try:
             raw = yf.download(t, period="2y", progress=False, auto_adjust=True)
             if raw.empty or len(raw) < 50: continue
-            
-            if isinstance(raw.columns, pd.MultiIndex):
-                raw.columns = raw.columns.get_level_values(0)
+            if isinstance(raw.columns, pd.MultiIndex): raw.columns = raw.columns.get_level_values(0)
             
             c = raw['Close'].values.flatten()
             v = raw['Volume'].values.flatten()
             cp = float(c[-1])
 
-            # Trend Status (Back-end calculation only)
-            m200 = np.mean(c[-200:]) if len(c) >= 200 else np.mean(c)
+            # Trend Data
+            m20 = np.mean(c[-20:]); m50 = np.mean(c[-50:]); m200 = np.mean(c[-200:])
             
-            # ADX Logic
+            # ADX & Miro Logic
             adx_label, adx_val = calculate_adx_native(raw)
-            
-            # Miro Score Logic
             vol_surge = v[-1] / np.mean(v[-20:])
             p_change = (cp - c[-2]) / c[-2]
             
@@ -121,11 +109,17 @@ def run_master_scan(limit):
             if p_change > 0.02: miro_score += 3
             if adx_val > 25: miro_score += 2
 
+            # Institutional Recommendations (v5.9 Restoration)
+            if p_change > 0.01 and vol_surge > 2.0: reco = "🔥 AGGRESSIVE BUY"
+            elif p_change < -0.01 and vol_surge > 2.0: reco = "⚠️ INST. EXIT"
+            elif p_change > 0 and vol_surge > 1.2: reco = "💎 ACCUMULATE"
+            else: reco = "💤 NEUTRAL"
+
             all_data.append({
                 "Ticker": t, "Sector": sector_map.get(t, "Misc"), "Price": round(cp, 2),
-                "Miro_Score": miro_score, "Vol_Surge": round(vol_surge, 2),
+                "Recommendation": reco, "Miro_Score": miro_score, "Vol_Surge": round(vol_surge, 2),
                 "ADX Strength": adx_label, "ADX_Val": adx_val,
-                "Trend Status": "🟢 BULL" if cp > m200 else "⚪ NEUTRAL",
+                "MA 20": round(m20, 2), "MA 50": round(m50, 2), "MA 200": round(m200, 2),
                 "ATR": round(pd.concat([raw['High']-raw['Low'], abs(raw['High']-raw['Close'].shift(1))], axis=1).max(axis=1).tail(14).mean(), 2)
             })
         except: continue
@@ -133,8 +127,7 @@ def run_master_scan(limit):
     return pd.DataFrame(all_data)
 
 # --- 4. INTERFACE ---
-st.title("🏹 Nifty Sniper Elite v6.2")
-st.sidebar.header("Global Controls")
+st.title("🏹 Nifty Sniper Elite v6.3")
 v_vix = st.sidebar.number_input("India VIX", value=21.84)
 v_depth = st.sidebar.slider("Scan Depth", 50, 500, 100)
 v_risk = st.sidebar.number_input("Risk Per Trade (INR)", value=5000)
@@ -146,22 +139,21 @@ if st.sidebar.button("🚀 INITIALIZE MASTER SCAN"):
         sl_mult = 3.0 if v_vix > 20 else 2.0
         res['Stop_Loss'] = res['Price'] - (sl_mult * res['ATR'])
         res['Qty'] = (v_risk / (res['Price'] - res['Stop_Loss'])).replace([np.inf, -np.inf], 0).fillna(0).astype(int)
-        st.session_state['v62_results'] = res
+        st.session_state['v63_results'] = res
 
-if 'v62_results' in st.session_state:
-    df = st.session_state['v62_results']
+if 'v63_results' in st.session_state:
+    df = st.session_state['v63_results']
     
-    tabs = st.tabs(["🎯 Miro Score Leaderboard", "🔥 ADX Trend Tracker", "🛡️ Risk Lab", "🧬 Intelligence Lab"])
+    tabs = st.tabs(["🎯 Miro Score Leaderboard", "📈 Trend Tracker/Analysis", "🛡️ Risk Lab", "🧬 Intelligence Lab"])
     
     with tabs[0]:
-        st.subheader("Miro Score: Volume & Momentum")
-        # Focused only on Miro metrics
-        st.dataframe(df.sort_values("Miro_Score", ascending=False)[['Ticker', 'Price', 'Miro_Score', 'Vol_Surge', 'Sector']], use_container_width=True)
+        st.subheader("Miro Score & Buy/Sell Recommendations")
+        st.dataframe(df.sort_values("Miro_Score", ascending=False)[['Ticker', 'Price', 'Recommendation', 'Miro_Score', 'Vol_Surge']], use_container_width=True)
     
     with tabs[1]:
-        st.subheader("ADX Momentum Tracker")
-        # Replaced MA 20/50/200 with pure ADX Score and Trend Status
-        st.dataframe(df.sort_values("ADX_Val", ascending=False)[['Ticker', 'Price', 'ADX Strength', 'Trend Status', 'Sector']], use_container_width=True)
+        st.subheader("Structural Trend & ADX Analysis")
+        # Restored the MA values + ADX Strength here
+        st.dataframe(df.sort_values("ADX_Val", ascending=False)[['Ticker', 'Price', 'Recommendation', 'ADX Strength', 'MA 20', 'MA 50', 'MA 200']], use_container_width=True)
         
     with tabs[2]:
         st.subheader("Hedge Fund Risk Desk")
