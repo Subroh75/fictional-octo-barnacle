@@ -23,7 +23,7 @@ ai_active = initialize_ai()
 # --- AI AGENT: THE SUPREME COUNCIL ---
 def summon_council(ticker, row, vix):
     if not ai_active: return "⚠️ AI Engine Offline. Check Streamlit Secrets."
-    model = genai.GenerativeModel('gemini-2.0-flash')
+   model = genai.GenerativeModel('gemini-1.5-flash')
     
     context = f"""
     Ticker: {ticker} | Price: {row['Price']} 
