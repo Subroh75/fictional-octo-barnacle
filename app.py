@@ -7,8 +7,8 @@ import pandas as pd
 import google.generativeai as genai
 from datetime import datetime
 
-# --- 1. CONFIG & AI INITIALIZATION ---
-st.set_page_config(page_title="Nifty Sniper Elite", layout="wide")
+# --- 1. CONFIG & AI AGENTS ---
+st.set_page_config(page_title="Nifty Sniper Elite v5.1", layout="wide")
 
 def initialize_ai():
     try:
@@ -20,30 +20,54 @@ def initialize_ai():
 
 ai_active = initialize_ai()
 
-# --- 2. THE INTELLIGENCE MODULES ---
-
-def ai_filter_logic(query, df):
-    if not ai_active: return df
-    model = genai.GenerativeModel('gemini-2.5-flash')
-    prompt = f"Convert to pandas query: '{query}'. Columns: {list(df.columns)}. Return ONLY code."
+# --- AI AGENT: THE SUPREME COUNCIL ---
+def summon_council(ticker, row, vix):
+    if not ai_active: return "⚠️ AI Engine Offline. Check Secrets."
+    model = genai.GenerativeModel('gemini-2.0-flash')
+    now = datetime.now().strftime("%B %d, %Y")
+    
+    context = f"""
+    Ticker: {ticker}
+    Price: {row['Price']} | Signal: {row['Signal']}
+    Miro_Score: {row['Miro_Score']} | ADX: {row['ADX']}
+    Trend: {row['Trend']} | Vol_Surge: {row['Vol_Surge']}
+    VIX: {vix}
+    """
+    
+    prompt = f"""
+    Date: {now}. You are a Hedge Fund Committee. 
+    Perform a 3-agent debate on the following data:
+    1. **The Bull:** Argues for the 'Aggressive Buy' case.
+    2. **The Bear:** Looks for the 'Institutional Trap' or fakeout.
+    3. **The Risk Manager:** Sets a hard stop-loss based on VIX {vix}.
+    
+    Data: {context}
+    """
     try:
         resp = model.generate_content(prompt)
-        return df.query(resp.text.strip().replace('`', '').replace('python', ''))
-    except: return df
+        return resp.text
+    except Exception as e:
+        return f"Council is currently unavailable: {e}"
 
-def summon_council(ticker, row, vix):
-    if not ai_active: return "AI Engine Offline."
-    model = genai.GenerativeModel('gemini-2.5-flash')
-    now = datetime.now().strftime("%B %d, %Y")
-    context = f"Ticker: {ticker}, Miro_Score: {row['Miro_Score']}, Trend: {row['Trend']}, Vol_Surge: {row['Vol_Surge']}"
-    prompt = f"Date: {now} | Ticker: {ticker} | VIX: {vix}. Perform a Bull/Bear/Risk Manager debate for this Nifty 500 stock."
-    try: return model.generate_content(prompt).text
-    except: return "Council is currently in recess."
+# --- 2. NATIVE MATH ENGINE (ADX & TREND) ---
 
-# --- 3. THE MASTER DATA ENGINE (NIFTY 500 DEPTH) ---
+def calculate_adx_native(df, period=14):
+    high, low, close = df['High'], df['Low'], df['Close']
+    plus_dm = high.diff(); minus_dm = low.diff()
+    plus_dm = np.where((plus_dm > minus_dm) & (plus_dm > 0), plus_dm, 0)
+    minus_dm = np.where((minus_dm > plus_dm) & (minus_dm > 0), minus_dm, 0)
+    tr = pd.concat([high-low, abs(high-close.shift(1)), abs(low-close.shift(1))], axis=1).max(axis=1)
+    atr = tr.rolling(period).mean()
+    plus_di = 100 * (pd.Series(plus_dm).rolling(period).mean() / atr)
+    minus_di = 100 * (pd.Series(minus_dm).rolling(period).mean() / atr)
+    dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
+    adx = dx.rolling(period).mean()
+    return round(adx.iloc[-1], 1), round(plus_di.iloc[-1], 1), round(minus_di.iloc[-1], 1)
+
+# --- 3. THE DATA SCANNER (NIFTY 500) ---
 
 @st.cache_data(ttl=3600)
-def run_master_scan(limit, vix):
+def run_master_scan(limit):
     url = 'https://archives.nseindia.com/content/indices/ind_nifty500list.csv'
     try:
         n500 = pd.read_csv(url)
@@ -54,7 +78,7 @@ def run_master_scan(limit, vix):
         sector_map = {s: "Misc" for s in symbols}
 
     all_data = []
-    prog = st.progress(0, text="Snipering Nifty 500...")
+    prog = st.progress(0, text="Snipering Nifty 500 Depth...")
     
     for i, t in enumerate(symbols[:limit]):
         prog.progress((i + 1) / limit)
@@ -62,83 +86,83 @@ def run_master_scan(limit, vix):
             raw = yf.download(t, period="1y", progress=False, auto_adjust=True)
             if raw.empty or len(raw) < 50: continue
             
-            # RAW MATH BYPASS (Multi-Index Fix)
-            c = raw['Close'].values.flatten()
-            v = raw['Volume'].values.flatten()
-            h = raw['High'].values.flatten()
-            l = raw['Low'].values.flatten()
+            # Flattening
+            df = pd.DataFrame(index=raw.index)
+            df['Close'] = raw['Close'].values.flatten()
+            df['High'] = raw['High'].values.flatten()
+            df['Low'] = raw['Low'].values.flatten()
+            df['Volume'] = raw['Volume'].values.flatten()
+
+            cp = float(df['Close'].iloc[-1])
             
-            # --- MIROFISH MOMENTUM ---
-            avg_vol = np.mean(v[-20:])
-            vol_surge = v[-1] / avg_vol if avg_vol > 0 else 0
-            p_change = (c[-1] - c[-2]) / c[-2]
+            # --- TREND DESK ---
+            m20 = np.mean(df['Close'].values[-20:])
+            m50 = np.mean(df['Close'].values[-50:])
+            m200 = np.mean(df['Close'].values[-200:]) if len(df) >= 200 else np.mean(df['Close'].values)
+            
+            # --- ADX DESK ---
+            adx, d_plus, d_minus = calculate_adx_native(df)
+
+            # --- FLOW & MIRO DESK ---
+            vol_surge = df['Volume'].iloc[-1] / np.mean(df['Volume'].values[-20:])
+            p_change = (cp - df['Close'].iloc[-2]) / df['Close'].iloc[-2]
             
             miro_score = 0
             if vol_surge > 1.8: miro_score += 5
             if p_change > 0.02: miro_score += 3
-            
-            # --- TREND RIBBON ---
-            m20 = np.mean(c[-20:])
-            m50 = np.mean(c[-50:])
-            m200 = np.mean(c[-200:]) if len(c) >= 200 else np.mean(c)
-            dist_ma20 = ((c[-1] - m20) / m20) * 100
-            
-            # --- RISK DATA (ATR) ---
-            tr = np.maximum(h-l, np.maximum(np.abs(h-pd.Series(c).shift(1)), np.abs(l-pd.Series(c).shift(1))))
-            atr = tr.tail(14).mean()
+            if adx > 25: miro_score += 2
+
+            # Institutional Signal Logic
+            if p_change > 0.01 and vol_surge > 2.0: signal = "🔥 AGGRESSIVE BUY"
+            elif p_change < -0.01 and vol_surge > 2.0: signal = "⚠️ INST. EXIT"
+            elif p_change > 0 and vol_surge > 1.2: signal = "💎 ACCUMULATE"
+            else: signal = "💤 NEUTRAL"
 
             all_data.append({
-                "Ticker": t, "Sector": sector_map.get(t, "Misc"), "Price": round(c[-1], 2),
-                "Miro_Score": miro_score, "Vol_Surge": round(vol_surge, 2),
-                "MA 20": round(m20, 2), "MA 200": round(m200, 2), "Dist_MA20 %": round(dist_ma20, 2),
-                "ATR": round(atr, 2), "Trend": "🟢 STRONG" if c[-1] > m200 else "⚪ NEUTRAL"
+                "Ticker": t, "Sector": sector_map.get(t, "Misc"), "Price": round(cp, 2),
+                "Signal": signal, "Miro_Score": miro_score, "ADX": adx, 
+                "D+": d_plus, "D-": d_minus, "Vol_Surge": round(vol_surge, 2),
+                "MA 20": round(m20, 2), "MA 50": round(m50, 2), "MA 200": round(m200, 2),
+                "Trend": "🟢 BULL" if cp > m200 else "⚪ NEUTRAL"
             })
         except: continue
-            
     prog.empty()
     return pd.DataFrame(all_data)
 
-# --- 4. THE INTERFACE ---
-
+# --- 4. INTERFACE ---
 st.sidebar.title("🏹 Nifty Sniper Elite")
-vix_val = st.sidebar.number_input("India VIX", value=21.84)
-scan_depth = st.sidebar.slider("Scan Depth", 50, 500, 100)
-risk_amt = st.sidebar.number_input("Risk Per Trade (INR)", value=5000)
+v_vix = st.sidebar.number_input("India VIX", value=21.84)
+v_depth = st.sidebar.slider("Scan Depth", 50, 500, 100)
 
 if st.sidebar.button("🚀 INITIALIZE MASTER SCAN"):
     st.cache_data.clear()
-    res = run_master_scan(scan_depth, vix_val)
+    res = run_master_scan(v_depth)
     if not res.empty:
-        sl_mult = 3.0 if vix_val > 20 else 2.0
-        res['Stop_Loss'] = res['Price'] - (sl_mult * res['ATR'])
-        res['Qty'] = (risk_amt / (res['Price'] - res['Stop_Loss'])).replace([np.inf, -np.inf], 0).fillna(0).astype(int)
         st.session_state['master_results'] = res
 
 if 'master_results' in st.session_state:
     df = st.session_state['master_results']
     
-    # Natural Language Screener
-    st.subheader("💬 AI Natural Language Screener")
-    ai_q = st.text_input("Example: 'Miro_Score > 7 and Sector == \"Financial Services\"'")
-    if ai_q: df = ai_filter_logic(ai_q, df)
-
-    tabs = st.tabs(["🎯 Leaderboard", "📈 Trend Ribbon", "📊 Inst. Flow", "🧠 Risk Lab", "🧬 Intelligence Lab"])
+    tabs = st.tabs(["🎯 Miro & Flow", "📈 Trend Ribbon", "🧬 Alpha Desk", "🧬 Intelligence Lab"])
     
     with tabs[0]:
-        st.dataframe(df.sort_values("Miro_Score", ascending=False), use_container_width=True)
+        st.subheader("Momentum & Institutional Flow")
+        st.dataframe(df.sort_values("Miro_Score", ascending=False)[['Ticker', 'Signal', 'Miro_Score', 'Vol_Surge', 'Price']], use_container_width=True)
+    
     with tabs[1]:
-        st.subheader("Structural Trend Analysis")
-        st.dataframe(df[['Ticker', 'Price', 'MA 20', 'MA 200', 'Dist_MA20 %', 'Trend']], use_container_width=True)
+        st.subheader("Structural Ribbon (20/50/200)")
+        st.dataframe(df[['Ticker', 'Price', 'MA 20', 'MA 50', 'MA 200', 'Trend']], use_container_width=True)
+        
     with tabs[2]:
-        st.subheader("Volume & Surge Flow")
-        st.dataframe(df[['Ticker', 'Vol_Surge', 'Miro_Score', 'Sector']], use_container_width=True)
+        st.subheader("ADX Trend Strength")
+        st.dataframe(df.sort_values("ADX", ascending=False)[['Ticker', 'ADX', 'D+', 'D-', 'Signal']], use_container_width=True)
+        
     with tabs[3]:
-        st.subheader("Hedge Fund Risk Desk")
-        st.dataframe(df[['Ticker', 'Price', 'Stop_Loss', 'Qty']], use_container_width=True)
-    with tabs[4]:
-        st.subheader("🧬 Intelligence Lab (Supreme Council)")
+        st.subheader("🧬 Supreme Judge Council (AI Agents)")
         target = st.selectbox("Select Ticker for AI Audit", df['Ticker'].tolist())
         if st.button("⚖️ Summon Council Debate"):
-            st.markdown(summon_council(target, df[df['Ticker'] == target].iloc[0], vix_val))
+            with st.spinner(f"Agents are debating {target}..."):
+                debate = summon_council(target, df[df['Ticker'] == target].iloc[0], v_vix)
+                st.markdown(debate)
 else:
-    st.info("System Online. Click 'INITIALIZE MASTER SCAN' in Sidebar.")
+    st.info("System Ready. Run Master Scan from Sidebar.")
