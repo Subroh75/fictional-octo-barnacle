@@ -5,10 +5,11 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 from google import genai
+import os
 from datetime import datetime
 
 # --- 1. CONFIG & AI CLIENT ---
-st.set_page_config(page_title="Nifty Sniper v7.6", layout="wide")
+st.set_page_config(page_title="Nifty Sniper v7.7.1", layout="wide")
 
 def get_ai_client():
     try:
@@ -19,100 +20,98 @@ def get_ai_client():
 
 client = get_ai_client()
 
-# --- 2. TOOL A: EARNINGS FRONT-RUNNER (Fundamental Scraper) ---
+# --- 2. THE PRIVATE LEDGER ---
+def save_to_ledger(ticker, strategy, price, content):
+    file_path = "sniper_ledger.csv"
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    new_entry = pd.DataFrame([[timestamp, ticker, strategy, price, content]], 
+                             columns=["Timestamp", "Ticker", "Strategy", "Price", "Analysis"])
+    if not os.path.isfile(file_path):
+        new_entry.to_csv(file_path, index=False)
+    else:
+        new_entry.to_csv(file_path, mode='a', header=False, index=False)
+    st.success(f"✅ Logged {ticker} to Private Ledger.")
+
+# --- 3. AI AGENTS ---
 def run_earnings_audit(ticker):
-    if not client: return "⚠️ AI Engine Offline."
-    prompt = f"""
-    Act as an Equity Research Analyst. Search for recent India exchange filings (Regulation 30) for {ticker} from the last 30 days.
-    Specifically look for: Capacity expansion, new order wins, debt reduction, or management changes.
-    Provide:
-    1. **Earnings Momentum Score** (-10 to 10).
-    2. **Key Catalyst:** Summary of the most important filing found.
-    """
+    if not client: return "⚠️ AI Offline."
+    prompt = f"Equity Research: Search India Reg 30 filings for {ticker} (30d). Score Earnings Momentum (-10 to 10) & identify catalyst."
     try:
-        response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
-        return response.text
-    except Exception as e: return f"Audit failed: {e}"
+        return client.models.generate_content(model="gemini-2.5-flash", contents=prompt).text
+    except: return "Audit failed."
 
-# --- 3. TOOL B: INTELLIGENCE LAB (Tactical Debate) ---
 def summon_council(ticker, row, vix):
-    if not client: return "⚠️ AI Engine Offline."
+    if not client: return "⚠️ AI Offline."
     context = f"Ticker: {ticker} | Price: {row['Price']} | VIX: {vix} | ADX: {row['ADX Strength']} | Miro: {row['Miro_Score']}"
-    prompt = f"""
-    You are a Hedge Fund Committee. Perform a 3-agent debate for {ticker}:
-    1. **The Bull:** Momentum and volume thesis.
-    2. **The Bear:** Institutional traps and macro risks.
-    3. **The Risk Manager:** Stop-loss and position sizing.
-    Data: {context}
-    """
+    prompt = f"Hedge Fund Committee Debate (Bull, Bear, Risk Manager) for {ticker}. Data: {context}"
     try:
-        response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
-        return response.text
-    except Exception as e: return f"Council in recess: {e}"
+        return client.models.generate_content(model="gemini-2.5-flash", contents=prompt).text
+    except: return "Council in recess."
 
-# --- 4. MARKET WEATHER STATION (REGIME) ---
-def get_market_regime(df):
-    total = len(df)
-    above_200 = len(df[df['Above_200'] == True])
-    panic_stocks = len(df[df['Z-Score'] < -2.0])
-    breadth_pct = (above_200 / total) * 100
-    panic_pct = (panic_stocks / total) * 100
-    
-    if breadth_pct > 60: return "🔥 BULL REGIME", "Focus on Miro Score", "success"
-    elif breadth_pct < 40 and panic_pct > 15: return "😱 PANIC REGIME", "Focus on Mean Reversion", "error"
-    elif breadth_pct < 40: return "❄️ BEAR REGIME", "Cash is King", "warning"
-    else: return "⚖️ MILD/NEUTRAL", "Selective Sector Rotation", "info"
-
-# --- 5. DATA ENGINE ---
+# --- 4. HEDGE FUND MATH ENGINE ---
 def calculate_metrics(df):
     try:
         c = df['Close'].values.flatten()
         h, l = df['High'].values.flatten(), df['Low'].values.flatten()
         m20, m50, m200 = np.mean(c[-20:]), np.mean(c[-50:]), np.mean(c[-200:])
+        
+        # ATR & ADX
         tr = pd.concat([pd.Series(h-l), abs(h-pd.Series(c).shift(1)), abs(l-pd.Series(c).shift(1))], axis=1).max(axis=1)
-        atr = tr.rolling(14).mean()
+        atr = tr.rolling(14).mean().iloc[-1]
+        
         plus_di = 100 * (np.clip(pd.Series(h).diff(), 0, None).rolling(14).mean() / atr)
         minus_di = 100 * (np.clip((-pd.Series(l).diff()), 0, None).rolling(14).mean() / atr)
         adx = ((abs(plus_di - minus_di) / (plus_di + minus_di)) * 100).rolling(14).mean().iloc[-1]
+        
+        # Z-Score & Volume
         z = (c[-1] - m20) / np.std(c[-20:])
         vol_surge = df['Volume'].iloc[-1] / df['Volume'].tail(20).mean()
-        return {"cp": c[-1], "m20": m20, "m50": m50, "m200": m200, "adx": adx, "z": round(z, 2), "vol_surge": round(vol_surge, 2), "atr": atr.iloc[-1], "above_200": c[-1] > m200}
+        
+        # Mean Reversion Signal
+        rev_sig = "💤 NEUTRAL"
+        if z < -2.0: rev_sig = "🪃 REVERSION BUY"
+        elif z > 2.0: rev_sig = "⚠️ OVEREXTENDED"
+
+        return {"cp": c[-1], "m20": m20, "m50": m50, "m200": m200, "adx": adx, "z": round(z, 2), 
+                "vol_surge": round(vol_surge, 2), "atr": atr, "rev_sig": rev_sig}
     except: return None
 
+# --- 5. DATA SCANNER ---
 @st.cache_data(ttl=3600)
 def run_master_scan(limit):
     url = 'https://archives.nseindia.com/content/indices/ind_nifty500list.csv'
     n500 = pd.read_csv(url)
     symbols = [s + ".NS" for s in n500['Symbol'].tolist()]
     all_data = []
-    prog = st.progress(0, text=f"Deep Audit: {limit} Stocks...")
+    prog = st.progress(0, text="Deep Audit: 500 Nifty Stocks...")
     for i, t in enumerate(symbols[:limit]):
         prog.progress((i + 1) / limit)
         try:
             raw = yf.download(t, period="2y", progress=False, auto_adjust=True)
             if isinstance(raw.columns, pd.MultiIndex): raw.columns = raw.columns.get_level_values(0)
             m = calculate_metrics(raw)
-            if m: all_data.append({"Ticker": t, "Price": round(m['cp'], 2), "Miro_Score": 10 if m['vol_surge'] > 2 else 2, "Z-Score": m['z'], "Vol_Surge": m['vol_surge'], "ADX Strength": f"🔥 {round(m['adx'],1)}" if m['adx'] > 25 else f"💤 {round(m['adx'],1)}", "MA 20": round(m['m20'], 2), "MA 50": round(m['m50'], 2), "MA 200": round(m['m200'], 2), "ATR": round(m['atr'], 2), "Above_200": m['above_200']})
+            if m:
+                all_data.append({"Ticker": t, "Price": round(m['cp'], 2), "Miro_Score": 10 if m['vol_surge'] > 2 else 2, 
+                                   "Z-Score": m['z'], "Rev_Signal": m['rev_sig'], "Vol_Surge": m['vol_surge'], 
+                                   "ADX Strength": f"🔥 {round(m['adx'],1)}" if m['adx'] > 25 else f"💤 {round(m['adx'],1)}", 
+                                   "MA 20": round(m['m20'], 2), "MA 50": round(m['m50'], 2), "MA 200": round(m['m200'], 2), 
+                                   "ATR": round(m['atr'], 2), "Above_200": m['cp'] > m['m200']})
         except: continue
     return pd.DataFrame(all_data)
 
 # --- 6. INTERFACE ---
-st.title("🏹 Nifty Hedge Fund Master v7.6")
-
+st.title("🏹 Nifty Sniper v7.7.1")
 v_depth = st.sidebar.slider("Scan Depth", 50, 500, 500)
 v_vix = st.sidebar.number_input("India VIX", value=22.50)
-v_risk = st.sidebar.number_input("Risk Per Trade (INR)", value=5000)
+v_risk = st.sidebar.number_input("Risk Amount (INR)", value=5000)
 
 if st.sidebar.button("🚀 EXECUTE GLOBAL AUDIT"):
-    st.session_state['v76_results'] = run_master_scan(v_depth)
+    st.session_state['v771_results'] = run_master_scan(v_depth)
 
-if 'v76_results' in st.session_state:
-    df = st.session_state['v76_results']
-    regime_name, advice, color = get_market_regime(df)
-    st.sidebar.markdown(f"### Weather: {regime_name}")
-    getattr(st.sidebar, color)(f"Strategy: {advice}")
-
-    # Risk Logic
+if 'v771_results' in st.session_state:
+    df = st.session_state['v771_results']
+    
+    # RISK LAB MATH
     sl_mult = 3.0 if v_vix > 20 else 2.0
     df['Stop_Loss'] = df['Price'] - (sl_mult * df['ATR'])
     df['Qty'] = (v_risk / (df['Price'] - df['Stop_Loss'])).replace([np.inf, -np.inf], 0).fillna(0).astype(int)
@@ -120,26 +119,30 @@ if 'v76_results' in st.session_state:
     tabs = st.tabs(["🎯 Miro Flow", "📈 Trend Analysis", "🪃 Mean Reversion", "🧬 Earnings Front-Runner", "🧠 Intelligence Lab", "🛡️ Risk Lab"])
     
     with tabs[0]:
-        st.subheader("Miro Leaderboard")
+        st.subheader("Miro Score Leaderboard")
         st.dataframe(df.sort_values("Miro_Score", ascending=False)[['Ticker', 'Price', 'Miro_Score', 'Vol_Surge']], use_container_width=True)
     with tabs[1]:
-        st.subheader("Structural Trend")
+        st.subheader("Structural Trend Analysis")
         st.dataframe(df[['Ticker', 'Price', 'ADX Strength', 'MA 20', 'MA 50', 'MA 200']], use_container_width=True)
     with tabs[2]:
-        st.subheader("Mean Reversion")
-        st.dataframe(df.sort_values("Z-Score")[['Ticker', 'Price', 'Z-Score']], use_container_width=True)
+        st.subheader("Mean Reversion Desk")
+        st.dataframe(df.sort_values("Z-Score")[['Ticker', 'Price', 'Rev_Signal', 'Z-Score']], use_container_width=True)
     with tabs[3]:
-        st.subheader("🧬 Earnings Front-Runner (Fundamental Audit)")
-        target_e = st.selectbox("Select Asset for Filing Scan", df['Ticker'].tolist())
-        if st.button("🔍 Run Filing Audit"):
-            with st.spinner("Searching Reg 30 Filings..."): st.markdown(run_earnings_audit(target_e))
+        st.subheader("🧬 Earnings Front-Runner")
+        t_e = st.selectbox("Ticker for Filing Audit", df['Ticker'].tolist())
+        if st.button("🔍 Run Audit"):
+            res = run_earnings_audit(t_e)
+            st.markdown(res)
+            if st.button("💾 Save Audit"): save_to_ledger(t_e, "Earnings Audit", df[df['Ticker']==t_e]['Price'].values[0], res)
     with tabs[4]:
-        st.subheader("🧠 Intelligence Lab (Tactical Debate)")
-        target_i = st.selectbox("Select Asset for Committee Debate", df['Ticker'].tolist())
+        st.subheader("🧠 Intelligence Lab")
+        t_i = st.selectbox("Ticker for Debate", df['Ticker'].tolist())
         if st.button("⚖️ Summon Council"):
-            with st.spinner("Agents Debating..."): st.markdown(summon_council(target_i, df[df['Ticker'] == target_i].iloc[0], v_vix))
+            res = summon_council(t_i, df[df['Ticker'] == t_i].iloc[0], v_vix)
+            st.markdown(res)
+            if st.button("💾 Save Debate"): save_to_ledger(t_i, "Committee Debate", df[df['Ticker']==t_i]['Price'].values[0], res)
     with tabs[5]:
-        st.subheader("Risk Desk")
+        st.subheader("Risk Lab & Ledger")
         st.dataframe(df[['Ticker', 'Price', 'Stop_Loss', 'Qty', 'ATR']], use_container_width=True)
-else:
-    st.info("System Ready. Depth: 500.")
+        if os.path.exists("sniper_ledger.csv"):
+            st.download_button("📥 Download Private Ledger", data=open("sniper_ledger.csv", "rb"), file_name="nifty_sniper_ledger.csv")
