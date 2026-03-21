@@ -9,7 +9,7 @@ import os
 from datetime import datetime
 
 # --- 1. CONFIG & AI CLIENT ---
-st.set_page_config(page_title="Nifty Sniper v7.7.1", layout="wide")
+st.set_page_config(page_title="Nifty Sniper v7.7.2", layout="wide")
 
 def get_ai_client():
     try:
@@ -55,7 +55,6 @@ def calculate_metrics(df):
         h, l = df['High'].values.flatten(), df['Low'].values.flatten()
         m20, m50, m200 = np.mean(c[-20:]), np.mean(c[-50:]), np.mean(c[-200:])
         
-        # ATR & ADX
         tr = pd.concat([pd.Series(h-l), abs(h-pd.Series(c).shift(1)), abs(l-pd.Series(c).shift(1))], axis=1).max(axis=1)
         atr = tr.rolling(14).mean().iloc[-1]
         
@@ -63,17 +62,26 @@ def calculate_metrics(df):
         minus_di = 100 * (np.clip((-pd.Series(l).diff()), 0, None).rolling(14).mean() / atr)
         adx = ((abs(plus_di - minus_di) / (plus_di + minus_di)) * 100).rolling(14).mean().iloc[-1]
         
-        # Z-Score & Volume
         z = (c[-1] - m20) / np.std(c[-20:])
         vol_surge = df['Volume'].iloc[-1] / df['Volume'].tail(20).mean()
+        p_change = (c[-1] - c[-2]) / c[-2]
         
+        # --- RESTORED: INSTITUTIONAL RECOMMENDATION LOGIC ---
+        if p_change > 0.02 and vol_surge > 2.5: reco = "🚀 STRONG BUY (SURGE)"
+        elif p_change > 0.01 and vol_surge > 1.8: reco = "🔥 AGGRESSIVE BUY"
+        elif p_change < -0.02 and vol_surge > 2.5: reco = "🛑 STRONG SELL (EXIT)"
+        elif p_change < -0.01 and vol_surge > 1.8: reco = "⚠️ INST. EXIT"
+        elif p_change > 0 and vol_surge > 1.2: reco = "💎 ACCUMULATE"
+        else: reco = "💤 NEUTRAL"
+
         # Mean Reversion Signal
         rev_sig = "💤 NEUTRAL"
-        if z < -2.0: rev_sig = "🪃 REVERSION BUY"
+        if z < -2.2: rev_sig = "🪃 STRONG REVERSION BUY"
+        elif z < -1.8: rev_sig = "🪃 REVERSION BUY"
         elif z > 2.0: rev_sig = "⚠️ OVEREXTENDED"
 
         return {"cp": c[-1], "m20": m20, "m50": m50, "m200": m200, "adx": adx, "z": round(z, 2), 
-                "vol_surge": round(vol_surge, 2), "atr": atr, "rev_sig": rev_sig}
+                "vol_surge": round(vol_surge, 2), "atr": atr, "rev_sig": rev_sig, "reco": reco}
     except: return None
 
 # --- 5. DATA SCANNER ---
@@ -92,7 +100,7 @@ def run_master_scan(limit):
             m = calculate_metrics(raw)
             if m:
                 all_data.append({"Ticker": t, "Price": round(m['cp'], 2), "Miro_Score": 10 if m['vol_surge'] > 2 else 2, 
-                                   "Z-Score": m['z'], "Rev_Signal": m['rev_sig'], "Vol_Surge": m['vol_surge'], 
+                                   "Recommendation": m['reco'], "Z-Score": m['z'], "Rev_Signal": m['rev_sig'], "Vol_Surge": m['vol_surge'], 
                                    "ADX Strength": f"🔥 {round(m['adx'],1)}" if m['adx'] > 25 else f"💤 {round(m['adx'],1)}", 
                                    "MA 20": round(m['m20'], 2), "MA 50": round(m['m50'], 2), "MA 200": round(m['m200'], 2), 
                                    "ATR": round(m['atr'], 2), "Above_200": m['cp'] > m['m200']})
@@ -100,16 +108,16 @@ def run_master_scan(limit):
     return pd.DataFrame(all_data)
 
 # --- 6. INTERFACE ---
-st.title("🏹 Nifty Sniper v7.7.1")
+st.title("🏹 Nifty Sniper v7.7.2")
 v_depth = st.sidebar.slider("Scan Depth", 50, 500, 500)
 v_vix = st.sidebar.number_input("India VIX", value=22.50)
 v_risk = st.sidebar.number_input("Risk Amount (INR)", value=5000)
 
 if st.sidebar.button("🚀 EXECUTE GLOBAL AUDIT"):
-    st.session_state['v771_results'] = run_master_scan(v_depth)
+    st.session_state['v772_results'] = run_master_scan(v_depth)
 
-if 'v771_results' in st.session_state:
-    df = st.session_state['v771_results']
+if 'v772_results' in st.session_state:
+    df = st.session_state['v772_results']
     
     # RISK LAB MATH
     sl_mult = 3.0 if v_vix > 20 else 2.0
@@ -119,11 +127,12 @@ if 'v771_results' in st.session_state:
     tabs = st.tabs(["🎯 Miro Flow", "📈 Trend Analysis", "🪃 Mean Reversion", "🧬 Earnings Front-Runner", "🧠 Intelligence Lab", "🛡️ Risk Lab"])
     
     with tabs[0]:
-        st.subheader("Miro Score Leaderboard")
-        st.dataframe(df.sort_values("Miro_Score", ascending=False)[['Ticker', 'Price', 'Miro_Score', 'Vol_Surge']], use_container_width=True)
+        st.subheader("Miro Leaderboard (Momentum & Institutional Buying)")
+        # RESTORED RECOMMENDATION COLUMN HERE
+        st.dataframe(df.sort_values("Miro_Score", ascending=False)[['Ticker', 'Price', 'Recommendation', 'Miro_Score', 'Vol_Surge']], use_container_width=True)
     with tabs[1]:
         st.subheader("Structural Trend Analysis")
-        st.dataframe(df[['Ticker', 'Price', 'ADX Strength', 'MA 20', 'MA 50', 'MA 200']], use_container_width=True)
+        st.dataframe(df[['Ticker', 'Price', 'Recommendation', 'ADX Strength', 'MA 20', 'MA 50', 'MA 200']], use_container_width=True)
     with tabs[2]:
         st.subheader("Mean Reversion Desk")
         st.dataframe(df.sort_values("Z-Score")[['Ticker', 'Price', 'Rev_Signal', 'Z-Score']], use_container_width=True)
