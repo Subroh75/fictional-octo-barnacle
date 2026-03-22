@@ -10,7 +10,7 @@ import io
 from datetime import datetime
 
 # --- 1. SYSTEM CONFIGURATION ---
-st.set_page_config(page_title="Nifty Sniper Elite v14.0", layout="wide")
+st.set_page_config(page_title="Nifty Sniper Elite v15.0", layout="wide")
 
 def get_ai_client():
     try:
@@ -21,8 +21,9 @@ def get_ai_client():
 
 client = get_ai_client()
 
-# --- 2. CSS COLOR INJECTION (Green/Red/Amber) ---
+# --- 2. VISUAL STYLING ENGINE ---
 def highlight_reco(val):
+    # Standard 2026 Institutional Color Palette
     color = '#2ecc71' if 'BUY' in val else '#e74c3c' if 'SELL' in val else '#f1c40f'
     return f'background-color: {color}; color: black; font-weight: bold'
 
@@ -41,7 +42,7 @@ def get_live_nifty_500():
         core = ["BIOCON.NS", "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ADANIPOWER.NS"]
         return core, {s: "Core Market" for s in core}
 
-# --- 4. THE UNSHRUNK MATH ENGINE ---
+# --- 4. THE FULL MATH ENGINE (UNSHRUNK) ---
 def calculate_metrics(df, ticker):
     try:
         if isinstance(df.columns, pd.MultiIndex):
@@ -55,8 +56,10 @@ def calculate_metrics(df, ticker):
         
         if len(c) < 200: return None
 
-        # Technical Indicators
+        # Moving Averages (MA 20, 50, 200)
         m20, m50, m200 = np.mean(c[-20:]), np.mean(c[-50:]), np.mean(c[-200:])
+        
+        # ATR Logic
         tr = pd.concat([pd.Series(h-l), abs(h-pd.Series(c).shift(1)), abs(l-pd.Series(c).shift(1))], axis=1).max(axis=1)
         atr = tr.rolling(14).mean().iloc[-1]
         
@@ -69,15 +72,15 @@ def calculate_metrics(df, ticker):
         dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
         adx = dx.rolling(14).mean().iloc[-1]
         
-        # Momentum & Volatility
+        # Momentum Logic
         z_score = (c[-1] - m20) / np.std(c[-20:])
         vol_surge = v[-1] / np.mean(v[-20:])
         p_chg = (c[-1] - c[-2]) / c[-2]
         
-        # Scoring Logic
+        # Miro Scoring
         miro = 2 + (5 if vol_surge > 2.0 else 0) + (3 if p_chg > 0.01 else 0)
         
-        # FINAL RECOMMENDATION LOGIC
+        # Signals
         reco = "🚀 STRONG BUY" if p_chg > 0.02 and vol_surge > 2.2 else "🛑 STRONG SELL" if p_chg < -0.02 and vol_surge > 2.2 else "🪃 REVERSION BUY" if z_score < -2.2 else "💤 NEUTRAL"
 
         return {
@@ -86,17 +89,14 @@ def calculate_metrics(df, ticker):
         }
     except: return None
 
-# --- 5. INTERFACE & SIDEBAR ---
-st.sidebar.subheader("🏦 Institutional Pulse")
-st.sidebar.table(pd.DataFrame({
-    "Metric": ["Date", "India VIX", "FII Net (Cr)"], 
-    "Value": ["Mar 22, 2026", "22.81", "-5,518.39"]
-}))
+# --- 5. INTERFACE & SIDEBAR HEATMAP ---
+st.sidebar.title("🏹 Nifty Sniper v15.0")
+st.sidebar.subheader("🏦 Mar 22, 2026 Pulse")
+st.sidebar.table(pd.DataFrame({"Metric": ["India VIX", "FII Net"], "Value": ["22.81", "🔴 SELLING"]}))
 
-v_risk = st.sidebar.number_input("Risk Per Trade (INR)", value=5000)
 scan_depth = st.sidebar.slider("Scan Depth", 50, 500, 500)
 
-if st.sidebar.button("🚀 INITIALIZE GLOBAL 500 SCAN"):
+if st.sidebar.button("🚀 EXECUTE FULL MARKET AUDIT"):
     symbols, sectors = get_live_nifty_500()
     all_data = []
     prog = st.progress(0, text="Deep Scanning Nifty 500...")
@@ -111,45 +111,54 @@ if st.sidebar.button("🚀 INITIALIZE GLOBAL 500 SCAN"):
                     "Ticker": t, "Sector": sectors.get(t, "Misc"), "Price": round(m['cp'], 2), 
                     "Recommendation": m['reco'], "Miro_Score": m['miro'], "Z-Score": m['z'], 
                     "ADX Strength": m['adx'], "Vol_Surge": m['vol'], "MA 20": round(m['m20'], 2),
-                    "MA 200": round(m['m200'], 2), "ATR": round(m['atr'], 2)
+                    "MA 50": round(m['m50'], 2), "MA 200": round(m['m200'], 2), "ATR": round(m['atr'], 2)
                 })
         except: continue
     
-    if all_data: st.session_state['v14_res'] = pd.DataFrame(all_data)
+    if all_data: st.session_state['v15_res'] = pd.DataFrame(all_data)
 
-# --- 6. TABS & STYLING ---
-if 'v14_res' in st.session_state:
-    df = st.session_state['v14_res']
+# --- 6. TABS & DYNAMIC HEATMAP ---
+if 'v15_res' in st.session_state:
+    df = st.session_state['v15_res']
     
-    # Risk Calculation
+    # DYNAMIC SIDEBAR HEATMAP
+    above_200 = len(df[df['MA 200'] < df['Price']])
+    breadth = (above_200 / len(df)) * 100
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🌡️ Market Heatmap")
+    if breadth > 60: st.sidebar.success(f"🔥 BULLISH REGIME ({round(breadth,1)}%)")
+    elif breadth < 40: st.sidebar.error(f"❄️ BEARISH REGIME ({round(breadth,1)}%)")
+    else: st.sidebar.warning(f"⚖️ NEUTRAL REGIME ({round(breadth,1)}%)")
+    
+    # Risk Math
+    v_risk = st.sidebar.number_input("Risk INR", value=5000)
     sl_mult = 3.0 if 22.81 > 20 else 2.0
     df['Stop_Loss'] = df['Price'] - (sl_mult * df['ATR'])
     df['Qty'] = (v_risk / (df['Price'] - df['Stop_Loss'])).replace([np.inf, -np.inf], 0).fillna(0).astype(int)
 
-    tabs = st.tabs(["🎯 Miro Flow", "📈 Trend & ADX", "🪃 Reversion", "💎 Weekly Sniper", "🧬 Filing Audit", "🧠 Intelligence Lab", "🛡️ Risk Lab"])
+    tabs = st.tabs(["🎯 Miro Flow", "📈 Trend & ADX", "🪃 Reversion", "💎 Weekly Sniper", "🧬 Filing Audit", "🧠 Intelligence Lab"])
     
     with tabs[0]: # MIRO FLOW
         st.subheader("🎯 Miro Momentum (Visualized)")
         st.dataframe(df[["Ticker", "Price", "Recommendation", "Miro_Score", "Vol_Surge"]].sort_values("Miro_Score", ascending=False).style.applymap(highlight_reco, subset=['Recommendation']), hide_index=True, use_container_width=True)
 
-    with tabs[1]: # TREND
-        st.subheader("📈 Trend & ADX (Visualized)")
-        # RESTORED RECOMMENDATION COLUMN HERE
-        st.dataframe(df[["Ticker", "Price", "Recommendation", "ADX Strength", "MA 20", "MA 200"]].style.applymap(highlight_reco, subset=['Recommendation']), hide_index=True, use_container_width=True)
+    with tabs[1]: # TREND (RESTORED MA 50)
+        st.subheader("📈 Trend, ADX & MA 50 (Visualized)")
+        st.dataframe(df[["Ticker", "Price", "Recommendation", "ADX Strength", "MA 20", "MA 50", "MA 200"]].style.applymap(highlight_reco, subset=['Recommendation']), hide_index=True, use_container_width=True)
         
     with tabs[2]: # REVERSION
         st.subheader("🪃 Mean Reversion (Visualized)")
         st.dataframe(df[["Ticker", "Price", "Recommendation", "Z-Score"]].sort_values("Z-Score").style.applymap(highlight_reco, subset=['Recommendation']), hide_index=True, use_container_width=True)
 
-    with tabs[3]: # WEEKLY INSTITUTIONAL
+    with tabs[3]: # WEEKLY
         st.subheader("💎 Weekly Institutional Flow (Visualized)")
         st.dataframe(df[["Ticker", "Price", "Recommendation", "Vol_Surge", "Sector"]].sort_values("Vol_Surge", ascending=False).style.applymap(highlight_reco, subset=['Recommendation']), hide_index=True, use_container_width=True)
 
     with tabs[4]: # FILING AUDIT
         t_f = st.selectbox("Select Asset for Audit", df['Ticker'].tolist())
-        if st.button("🔍 Run Audit"):
+        if st.button("🔍 Run 2026 Audit"):
             if client:
-                prompt = f"Today is March 22, 2026. Audit Regulation 30 filings for {t_f} in 2026. Focus on Q3 FY26 earnings and March 2026 expansion plans."
+                prompt = f"Today is March 22, 2026. Audit Regulation 30 filings for {t_f} in 2026. Focus on Q3 FY26 earnings and March 2026 catalysts."
                 with st.spinner("Analyzing..."):
                     st.markdown(client.models.generate_content(model="gemini-2.5-flash", contents=prompt).text)
 
@@ -160,10 +169,5 @@ if 'v14_res' in st.session_state:
                 prompt = f"Perform a 4-agent debate for {t_i} on March 22, 2026. Agents: BULL, BEAR, QUANT, and RISK MANAGER. Include VIX 22.81 context."
                 with st.spinner("Debating..."):
                     st.markdown(client.models.generate_content(model="gemini-2.5-flash", contents=prompt).text)
-
-    with tabs[6]: # RISK LAB
-        st.subheader("🛡️ Risk & Execution")
-        st.dataframe(df[["Ticker", "Price", "Stop_Loss", "Qty", "ATR"]], hide_index=True, use_container_width=True)
-
 else:
-    st.info("Scanner Ready. Click 'INITIALIZE GLOBAL 500 SCAN' to begin.")
+    st.info("Scanner Ready. Click 'EXECUTE FULL MARKET AUDIT' to begin.")
