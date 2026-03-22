@@ -9,7 +9,7 @@ import os
 from datetime import datetime
 
 # --- 1. CONFIG & AI CLIENT ---
-st.set_page_config(page_title="Nifty Sniper Elite v7.9.8", layout="wide")
+st.set_page_config(page_title="Nifty Sniper Elite v7.9.9", layout="wide")
 
 def get_ai_client():
     try:
@@ -50,27 +50,38 @@ def calculate_metrics(df, ticker):
         
         if len(c) < 200: return None
 
+        # Moving Averages
         m20, m50, m200 = np.mean(c[-20:]), np.mean(c[-50:]), np.mean(c[-200:])
+        
+        # ATR & ADX Logic
         tr = pd.concat([pd.Series(h-l), abs(h-pd.Series(c).shift(1)), abs(l-pd.Series(c).shift(1))], axis=1).max(axis=1)
-        atr = tr.rolling(14).mean().iloc[-1]
+        atr = tr.rolling(14).mean()
+        
+        plus_di = 100 * (np.clip(pd.Series(h).diff(), 0, None).rolling(14).mean() / atr)
+        minus_di = 100 * (np.clip((-pd.Series(l).diff()), 0, None).rolling(14).mean() / atr)
+        adx = ((abs(plus_di - minus_di) / (plus_di + minus_di)) * 100).rolling(14).mean().iloc[-1]
+        
+        # Z-Score & Vol Surge
         z = (c[-1] - m20) / np.std(c[-20:])
         vol_surge = v[-1] / np.mean(v[-20:])
         p_chg = (c[-1] - c[-2]) / c[-2]
         
-        # --- Miro Score Logic (0-10) ---
+        # Miro Score & Recommendations
         miro = 2
         if vol_surge > 1.5: miro += 3
         if vol_surge > 2.5: miro += 5
         if p_chg > 0.01: miro += 2
 
-        # --- Recommendation Logic ---
         reco = "💤 NEUTRAL"
         if p_chg > 0.02 and vol_surge > 2.2: reco = "🚀 STRONG BUY"
         elif z < -2.2: reco = "🪃 REVERSION BUY"
         elif p_chg < -0.02 and vol_surge > 2.2: reco = "🛑 STRONG SELL"
 
-        return {"cp": c[-1], "m20": m20, "m50": m50, "m200": m200, "z": round(z, 2), 
-                "vol": round(vol_surge, 2), "atr": atr, "reco": reco, "miro": miro}
+        return {
+            "cp": c[-1], "m20": m20, "m50": m50, "m200": m200, 
+            "adx": round(adx, 1), "z": round(z, 2), "vol": round(vol_surge, 2), 
+            "atr": atr.iloc[-1], "reco": reco, "miro": miro
+        }
     except: return None
 
 # --- 4. DATA SCANNER ---
@@ -82,7 +93,7 @@ def run_master_scan(limit):
         symbols = [s + ".NS" for s in n500['Symbol'].tolist()]
         sector_map = dict(zip(n500['Symbol'] + ".NS", n500['Industry']))
     except:
-        symbols = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "ICICIBANK.NS", "INFY.NS", "ESCORTS.NS"]
+        symbols = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ESCORTS.NS"]
         sector_map = {s: "Misc" for s in symbols}
 
     all_data = []
@@ -93,15 +104,18 @@ def run_master_scan(limit):
             raw = yf.download(t, period="2y", progress=False, auto_adjust=True)
             m = calculate_metrics(raw, t)
             if m:
-                all_data.append({"Ticker": t, "Sector": sector_map.get(t, "Misc"), "Price": round(m['cp'], 2), 
-                                   "Recommendation": m['reco'], "Miro_Score": m['miro'], "Z-Score": m['z'], 
-                                   "Vol_Surge": m['vol'], "MA 20": round(m['m20'], 2), 
-                                   "MA 50": round(m['m50'], 2), "MA 200": round(m['m200'], 2), "ATR": round(m['atr'], 2)})
+                all_data.append({
+                    "Ticker": t, "Sector": sector_map.get(t, "Misc"), "Price": round(m['cp'], 2), 
+                    "Recommendation": m['reco'], "Miro_Score": m['miro'], "Z-Score": m['z'], 
+                    "ADX Strength": m['adx'], "Vol_Surge": m['vol'], 
+                    "MA 20": round(m['m20'], 2), "MA 50": round(m['m50'], 2), 
+                    "MA 200": round(m['m200'], 2), "ATR": round(m['atr'], 2)
+                })
         except: continue
     return pd.DataFrame(all_data)
 
 # --- 5. INTERFACE ---
-st.title("🏹 Nifty Sniper Elite v7.9.8")
+st.title("🏹 Nifty Sniper Elite v7.9.9")
 
 # Sidebar
 st.sidebar.subheader("🏦 Smart Money Pulse")
@@ -111,10 +125,10 @@ v_risk = st.sidebar.number_input("Risk Per Trade (INR)", value=5000)
 
 if st.sidebar.button("🚀 EXECUTE GLOBAL SCAN"):
     res = run_master_scan(500)
-    if not res.empty: st.session_state['v798_res'] = res
+    if not res.empty: st.session_state['v799_res'] = res
 
-if 'v798_res' in st.session_state:
-    df = st.session_state['v798_res']
+if 'v799_res' in st.session_state:
+    df = st.session_state['v799_res']
     
     # Sidebar Weather logic
     regime, advice, color = get_market_regime(df)
@@ -130,12 +144,13 @@ if 'v798_res' in st.session_state:
     
     with tabs[0]: # Miro Flow
         st.subheader("Miro Flow (Momentum Leaderboard)")
-        miro_cols = ["Ticker", "Price", "Recommendation", "Miro_Score", "Vol_Surge"]
+        miro_cols = ["Ticker", "Price", "Recommendation", "Miro_Score", "Vol_Surge", "Sector"]
         st.dataframe(df[miro_cols].sort_values("Miro_Score", ascending=False), hide_index=True, use_container_width=True)
     
     with tabs[1]: # Trend
         st.subheader("Structural Trend Analysis")
-        trend_cols = ["Ticker", "Price", "Recommendation", "MA 20", "MA 50", "MA 200"]
+        # ADX Strength RESTORED HERE
+        trend_cols = ["Ticker", "Price", "Recommendation", "ADX Strength", "MA 20", "MA 50", "MA 200"]
         st.dataframe(df[trend_cols], hide_index=True, use_container_width=True)
         
     with tabs[2]: # Reversion
@@ -144,16 +159,18 @@ if 'v798_res' in st.session_state:
         st.dataframe(df[rev_cols].sort_values("Z-Score"), hide_index=True, use_container_width=True)
 
     with tabs[3]: # Earnings
-        t_e = st.selectbox("Select Ticker for Audit", df['Ticker'].tolist(), key="e_box")
-        if st.button("🔍 Run Audit"):
+        st.subheader("🧬 2026 Earnings & Filing Audit")
+        t_e = st.selectbox("Select Ticker", df['Ticker'].tolist(), key="e_box")
+        if st.button("🔍 Run 2026 Audit"):
             if client:
                 with st.spinner("Analyzing 2026 filings..."):
-                    prompt = f"Today is {datetime.now().strftime('%B %d, %Y')}. Search Reg 30 filings for {t_e} from last 30 days. Identify catalysts."
+                    prompt = f"Today is {datetime.now().strftime('%B %d, %Y')}. Search Reg 30 filings for {t_e} from last 30 days. Identify 2026 operational catalysts."
                     st.markdown(client.models.generate_content(model="gemini-2.5-flash", contents=prompt).text)
 
     with tabs[4]: # Intelligence Lab
-        t_i = st.selectbox("Select Ticker for Council", df['Ticker'].tolist(), key="i_box")
-        if st.button("⚖️ Summon Council"):
+        st.subheader("🧠 2026 Tactical Debate")
+        t_i = st.selectbox("Select Ticker", df['Ticker'].tolist(), key="i_box")
+        if st.button("⚖️ Summon 2026 Council"):
             if client:
                 with st.spinner("Debating..."):
                     st.markdown(client.models.generate_content(model="gemini-2.5-flash", contents=f"3-agent 2026 Debate for {t_i}.").text)
