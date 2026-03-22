@@ -8,8 +8,8 @@ from google import genai
 import os
 from datetime import datetime
 
-# --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Nifty Sniper Elite v9.0", layout="wide")
+# --- 1. SYSTEM CONFIG & 2026 PULSE ---
+st.set_page_config(page_title="Nifty Sniper Elite v10.0", layout="wide")
 
 def get_ai_client():
     try:
@@ -39,10 +39,7 @@ def calculate_metrics(df, ticker):
     try:
         # 2026 MultiIndex Flattening
         if isinstance(df.columns, pd.MultiIndex):
-            if ticker in df.columns.get_level_values(1):
-                df = df.xs(ticker, level=1, axis=1)
-            else:
-                df.columns = df.columns.get_level_values(0)
+            df = df.xs(ticker, level=1, axis=1) if ticker in df.columns.get_level_values(1) else df.columns.get_level_values(0)
 
         df.columns = [str(c).capitalize() for c in df.columns]
         c = df['Close'].values.flatten()
@@ -51,7 +48,6 @@ def calculate_metrics(df, ticker):
         
         if len(c) < 200: return None
 
-        # Technical Indicators
         m20, m50, m200 = np.mean(c[-20:]), np.mean(c[-50:]), np.mean(c[-200:])
         tr = pd.concat([pd.Series(h-l), abs(h-pd.Series(c).shift(1)), abs(l-pd.Series(c).shift(1))], axis=1).max(axis=1)
         atr = tr.rolling(14).mean()
@@ -65,18 +61,14 @@ def calculate_metrics(df, ticker):
         vol_surge = v[-1] / np.mean(v[-20:])
         p_chg = (c[-1] - c[-2]) / c[-2]
         
-        # Miro Score Logic (0-10)
+        # Miro Score & Recommendation
         miro = 2
         if vol_surge > 2.0: miro += 5
         if p_chg > 0.01: miro += 3
-
         reco = "🚀 STRONG BUY" if p_chg > 0.02 and vol_surge > 2.2 else "🪃 REVERSION" if z < -2.2 else "💤 NEUTRAL"
 
-        return {
-            "cp": c[-1], "m20": m20, "m50": m50, "m200": m200, 
-            "adx": round(adx, 1), "z": round(z, 2), "vol": round(vol_surge, 2), 
-            "atr": atr.iloc[-1], "reco": reco, "miro": miro
-        }
+        return {"cp": c[-1], "m20": m20, "m50": m50, "m200": m200, "adx": round(adx, 1), 
+                "z": round(z, 2), "vol": round(vol_surge, 2), "atr": atr.iloc[-1], "reco": reco, "miro": miro}
     except: return None
 
 # --- 4. THE SCANNER ---
@@ -88,7 +80,7 @@ def run_master_scan(limit):
         symbols = [s + ".NS" for s in n500['Symbol'].tolist()]
         sector_map = dict(zip(n500['Symbol'] + ".NS", n500['Industry']))
     except:
-        symbols = ["BIOCON.NS", "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ESCORTS.NS"]
+        symbols = ["BIOCON.NS", "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "ESCORTS.NS"]
         sector_map = {s: "Misc" for s in symbols}
 
     all_data = []
@@ -110,72 +102,58 @@ def run_master_scan(limit):
     return pd.DataFrame(all_data)
 
 # --- 5. INTERFACE ---
-st.sidebar.subheader("🏦 2026 Smart Money Pulse")
-st.sidebar.table(pd.DataFrame({"Metric": ["India VIX", "FII Bias"], "Value": ["22.81", "🔴 SELLING"]}))
+# Sidebar: Official March 22, 2026 Pulse
+st.sidebar.subheader("🏦 2026 Institutional Pulse")
+st.sidebar.table(pd.DataFrame({"Metric": ["India VIX", "FII Bias"], "Value": ["22.80", "🔴 SELLING (-₹7,558 Cr)"]}))
 v_risk = st.sidebar.number_input("Risk Per Trade (INR)", value=5000)
 
 if st.sidebar.button("🚀 EXECUTE GLOBAL SCAN"):
     res = run_master_scan(500)
-    if not res.empty: st.session_state['v9_res'] = res
+    if not res.empty: st.session_state['v10_res'] = res
 
-if 'v9_res' in st.session_state:
-    df = st.session_state['v9_res']
-    
-    # Sidebar Weather logic
+if 'v10_res' in st.session_state:
+    df = st.session_state['v10_res']
     regime, advice, color = get_market_regime(df)
     st.sidebar.markdown(f"### 🌡️ Market Weather: {regime}")
     getattr(st.sidebar, color)(f"Strategy: {advice}")
 
-    # Risk Calculation
-    sl_mult = 3.0 if 22.81 > 20 else 2.0
+    # Risk Math
+    sl_mult = 3.0 if 22.80 > 20 else 2.0
     df['Stop_Loss'] = df['Price'] - (sl_mult * df['ATR'])
     df['Qty'] = (v_risk / (df['Price'] - df['Stop_Loss'])).replace([np.inf, -np.inf], 0).fillna(0).astype(int)
 
-    tabs = st.tabs(["🎯 Miro Flow", "📈 Trend", "🪃 Reversion", "🧬 Earnings", "🧠 Intelligence", "🛡️ Risk Lab"])
+    tabs = st.tabs(["🎯 Miro Flow", "📈 Trend & ADX", "🪃 Reversion", "🧬 Earnings Front-Runner", "🧠 Intelligence Lab", "🛡️ Risk Lab"])
     
     with tabs[0]: # Miro Flow
-        st.subheader("Miro Flow (Momentum Leaderboard)")
-        cols = ["Ticker", "Price", "Recommendation", "Miro_Score", "Vol_Surge", "Sector"]
-        st.dataframe(df[cols].sort_values("Miro_Score", ascending=False), hide_index=True, use_container_width=True)
+        st.dataframe(df[["Ticker", "Price", "Recommendation", "Miro_Score", "Vol_Surge", "Sector"]].sort_values("Miro_Score", ascending=False), hide_index=True, use_container_width=True)
     
-    with tabs[1]: # Trend
-        st.subheader("Structural Trend & ADX Strength")
-        cols = ["Ticker", "Price", "Recommendation", "ADX Strength", "MA 20", "MA 50", "MA 200"]
-        st.dataframe(df[cols], hide_index=True, use_container_width=True)
+    with tabs[1]: # Trend & ADX
+        st.dataframe(df[["Ticker", "Price", "Recommendation", "ADX Strength", "MA 20", "MA 50", "MA 200"]], hide_index=True, use_container_width=True)
         
-    with tabs[2]: # Reversion
-        st.subheader("Statistical Mean Reversion (Z-Score)")
-        cols = ["Ticker", "Price", "Recommendation", "Z-Score"]
-        st.dataframe(df[cols].sort_values("Z-Score"), hide_index=True, use_container_width=True)
-
-    with tabs[3]: # Earnings
+    with tabs[3]: # Earnings Front-Runner
         st.subheader("🧬 2026 Filing Audit")
         t_e = st.selectbox("Select Asset", df['Ticker'].tolist(), key="e_box")
         if st.button("🔍 Run Audit"):
-            prompt = f"""
-            Today is March 22, 2026. Audit {t_e} Reg 30 filings for 2026.
-            If BIOCON: Specifically address the ₹4,150 Cr QIP (Jan 2026), 
-            the FDA approval for gSaxenda (Liraglutide) on Feb 24, 2026, 
-            and the Q3 FY26 Net Profit of ₹144 Cr (up 475%).
-            """
-            with st.spinner("Accessing 2026 Filings..."):
+            prompt = f"Today is March 22, 2026. Search and analyze Reg 30 filings for {t_e} from Jan-Mar 2026. For BIOCON, focus on the ₹4,150 Cr QIP (Jan 15), US FDA gSaxenda approval (Feb 24), and Q3 Net Profit of ₹144 Cr (up 475%)."
+            with st.spinner("Auditing 2026 Filings..."):
                 st.markdown(client.models.generate_content(model="gemini-2.5-flash", contents=prompt).text)
 
-    with tabs[4]: # Intelligence
-        st.subheader("🧠 2026 Tactical Debate")
+    with tabs[4]: # Intelligence Lab
+        st.subheader("🧠 2026 Strategic & Technical Council")
         t_i = st.selectbox("Select Asset", df['Ticker'].tolist(), key="i_box")
         if st.button("⚖️ Summon Council"):
             prompt = f"""
-            Perform a 3-agent debate for {t_i} on March 22, 2026.
-            Agents: BULL (Growth), BEAR (Skeptic), RISK MANAGER (VIX 22.81 context).
-            If BIOCON: Mention the Viatris integration deadline of March 31, 2026.
+            Today is March 22, 2026. Price: {df[df['Ticker']==t_i]['Price'].values[0]}. 
+            Debate {t_i} using 4 Agents:
+            - BULL: Focus on 2026 catalysts (QIP deleveraging, GLP-1 rollout).
+            - BEAR: Focus on FII exit (-₹7.5k Cr) and pricing pressure.
+            - TECHNICAL: Analyze the horizontal box (₹360-₹392) and MA 200 test.
+            - RISK: Focus on 22.80 VIX and March 31 integration deadline.
             """
             with st.spinner("Council debating..."):
                 st.markdown(client.models.generate_content(model="gemini-2.5-flash", contents=prompt).text)
 
     with tabs[5]: # Risk Lab
-        st.subheader("Execution Math")
-        cols = ["Ticker", "Price", "Stop_Loss", "Qty", "ATR"]
-        st.dataframe(df[cols], hide_index=True, use_container_width=True)
+        st.dataframe(df[["Ticker", "Price", "Stop_Loss", "Qty", "ATR"]], hide_index=True, use_container_width=True)
 else:
     st.info("Scanner Ready.")
