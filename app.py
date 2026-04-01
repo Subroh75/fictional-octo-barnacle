@@ -39,20 +39,26 @@ def get_anthropic_client():
 
 @st.cache_resource
 def get_breeze_client():
-    """Initialise Breeze SDK — cached for the session lifetime."""
+    """Initialise Breeze SDK — cached for the session lifetime.
+    Returns BreezeConnect instance if credentials are present and valid, else None.
+    """
     if not BREEZE_AVAILABLE:
         return None
     try:
-        app_key    = st.secrets.get("BREEZE_APP_KEY", "")
-        secret_key = st.secrets.get("BREEZE_SECRET_KEY", "")
-        session_tk = st.secrets.get("BREEZE_SESSION_TOKEN", "")
-        if not all([app_key, secret_key, session_tk]):
+        app_key    = st.secrets.get("BREEZE_APP_KEY", "").strip()
+        secret_key = st.secrets.get("BREEZE_SECRET_KEY", "").strip()
+        session_tk = st.secrets.get("BREEZE_SESSION_TOKEN", "").strip()
+        if not app_key or not secret_key or not session_tk:
             return None
         breeze = BreezeConnect(api_key=app_key)
-        breeze.generate_session(api_secret=secret_key, session_token=session_tk)
-        return breeze
-    except Exception as e:
-        st.warning(f"Breeze init failed: {e} — falling back to Yahoo Finance")
+        resp = breeze.generate_session(api_secret=secret_key, session_token=session_tk)
+        # Verify session is valid by calling get_customer_details
+        test = breeze.get_customer_details()
+        if test and test.get("Status") == 200:
+            return breeze
+        # Session invalid (expired token)
+        return None
+    except Exception:
         return None
 
 # =========================
@@ -685,7 +691,9 @@ if clear_cache:
 if run_scan:
     symbols_list, sector_map = get_nifty500_list()
     symbols_list = symbols_list[:scan_limit]
-    with st.spinner("Fetching live NSE data from Yahoo Finance..."):
+    breeze_active = get_breeze_client() is not None
+    data_source_msg = "🟢 Fetching live NSE data from Breeze (ICICI Direct)..." if breeze_active else "🟡 Fetching NSE data from Yahoo Finance..."
+    with st.spinner(data_source_msg):
         result_df = run_master_scan(tuple(symbols_list), sector_map)
     if not result_df.empty:
         st.session_state["scan_df"] = result_df
