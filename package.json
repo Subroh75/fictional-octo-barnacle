@@ -1,0 +1,15 @@
+{
+  "name": "nifty-market-bridge",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "market_bridge.js",
+  "scripts": {
+    "start": "node market_bridge.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "nse-bse-api": "latest",
+    "p-limit": "^6.2.0"
+  }
+}
