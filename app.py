@@ -8,10 +8,11 @@ import io
 from google import genai
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Nifty Sniper v24.1 | Miro Flow", layout="wide")
+st.set_page_config(page_title="Nifty Sniper v26.0 | GID Bridge", layout="wide")
 
+# YOUR MASTER KEYS
 SHEET_ID = "1SX9P19bzXWNypttEnfil195B8H63tjAZIBfK8PW2q9Y"
-GID = "1600033224" 
+GID = "1600033224"  # <--- YOUR TAB ID IS USED HERE
 
 def get_ai_client():
     try:
@@ -24,75 +25,70 @@ client = get_ai_client()
 
 def highlight_reco(val):
     if not isinstance(val, str): return ''
-    if 'Strong Buy' in val: return 'background-color: #2ecc71; color: black; font-weight: bold'
-    if 'Strong Sell' in val: return 'background-color: #e74c3c; color: white; font-weight: bold'
-    return 'background-color: #f1c40f; color: black; font-weight: bold'
+    v = val.lower()
+    if 'strong buy' in v: return 'background-color: #2ecc71; color: black; font-weight: bold'
+    if 'strong sell' in v: return 'background-color: #e74c3c; color: white; font-weight: bold'
+    return 'background-color: #f1c40f; color: black'
 
-# --- 2. PRIVATE BRIDGE ENGINE ---
+# --- 2. DATA BRIDGE (THE GID USAGE) ---
 @st.cache_data(ttl=300)
-def fetch_miro_data():
-    url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={GID}"
+def fetch_from_gid():
+    # THE GID IS USED IN THIS URL STRING TO FETCH THE SPECIFIC TAB
+    export_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={GID}"
+    
     try:
-        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
-        # skiprows=7 is the sweet spot for the SMA_Screener_v1.0 template
-        df = pd.read_csv(io.StringIO(response.text), skiprows=7)
+        response = requests.get(export_url, headers={'User-Agent': 'Mozilla/5.0'})
+        # skiprows=6 targets the headers in Row 7 (STOCK, PRICE, etc.)
+        df = pd.read_csv(io.StringIO(response.text), skiprows=6)
         
-        # CLEANING STEP: Remove invisible spaces from headers
-        df.columns = df.columns.str.strip()
+        # Cleanup: Remove spaces from column names
+        df.columns = [str(c).strip() for c in df.columns]
         
-        # Miro Score Logic
-        df['Miro_Score'] = 2
+        # Miro Score Calculation
+        df['Miro_Score'] = 0
         if 'CHANGE %' in df.columns:
-            # Extract number even if ▲/▼ symbols are present
-            df['Clean_Chg'] = df['CHANGE %'].astype(str).str.extract(r'([-+]?\d*\.\d+|\d+)').astype(float)
-            df.loc[df['Clean_Chg'] > 1.5, 'Miro_Score'] += 5
+            # Your sheet has arrows in 'CHANGE %' and numbers in the next column
+            change_num_col = df.columns[list(df.columns).index('CHANGE %') + 1]
+            df['Num_Change'] = pd.to_numeric(df[change_num_col], errors='coerce')
+            df['Miro_Score'] += df['Num_Change'].apply(lambda x: 5 if x > 1.5 else 0)
         
         return df
     except Exception as e:
-        st.error(f"Bridge Sync Failed: {e}")
+        st.error(f"Sync Error: {e}")
         return pd.DataFrame()
 
-# --- 3. INTERFACE ---
-st.sidebar.title("🏹 Nifty Sniper v24.1")
+# --- 3. THE COMMAND CENTER ---
+st.sidebar.title("🏹 Nifty Sniper v26.0")
 
-if st.sidebar.button("🚀 SYNC MIRO FLOW"):
-    data = fetch_miro_data()
+if st.sidebar.button("🚀 SYNC TAB: 1600033224"):
+    data = fetch_from_gid()
     if not data.empty:
-        st.session_state['miro_data'] = data
+        st.session_state['miro_v26'] = data
+        st.sidebar.success("Tab Synced Successfully!")
 
-if 'miro_data' in st.session_state:
-    df = st.session_state['miro_data']
+if 'miro_v26' in st.session_state:
+    df = st.session_state['miro_v26']
     
     t1, t2 = st.tabs(["🎯 Miro Flow", "🧠 Intelligence Lab"])
     
     with t1:
-        st.subheader("🎯 Miro Momentum Leaderboard")
+        # Display Core Columns
+        display_cols = [c for c in ['STOCK', 'PRICE', 'CHANGE %', 'SMA Rating', 'Miro_Score'] if c in df.columns]
         
-        # Safety check for columns
-        target_cols = ['STOCK', 'PRICE', 'CHANGE %', 'SMA Rating', 'Miro_Score']
-        available_cols = [c for c in target_cols if c in df.columns]
-        
-        # Create a display dataframe
-        display_df = df[available_cols].sort_values("Miro_Score", ascending=False)
-        
-        # APPLY STYLING ONLY IF 'SMA Rating' EXISTS
-        if 'SMA Rating' in display_df.columns:
+        if 'SMA Rating' in df.columns:
             st.dataframe(
-                display_df.style.map(highlight_reco, subset=['SMA Rating']),
+                df[display_cols].sort_values("Miro_Score", ascending=False).style.map(highlight_reco, subset=['SMA Rating']),
                 use_container_width=True, hide_index=True
             )
         else:
-            st.dataframe(display_df, use_container_width=True, hide_index=True)
-            st.warning("Note: 'SMA Rating' column not found for styling.")
+            st.dataframe(df[display_cols].sort_values("Miro_Score", ascending=False), use_container_width=True)
 
     with t2:
-        ticker = st.selectbox("Select Asset", df['STOCK'].tolist() if 'STOCK' in df.columns else [])
+        ticker = st.selectbox("Select Ticker", df['STOCK'].tolist() if 'STOCK' in df.columns else [])
         if st.button("⚖️ Summon Council") and ticker:
             if client:
-                # Get the rating safely
                 rating = df[df['STOCK']==ticker]['SMA Rating'].values[0] if 'SMA Rating' in df.columns else "N/A"
-                prompt = f"4-agent debate for {ticker}. SMA Status: {rating}. Current Date: April 1, 2026."
-                with st.spinner("Consulting the Oracle..."):
-                    st.markdown(client.models.generate_content(model="gemini-2.5-flash", contents=prompt).text)
+                prompt = f"Perform a strategic 4-agent debate for {ticker}. SMA Rating: {rating}."
+                st.markdown(client.models.generate_content(model="gemini-2.5-flash", contents=prompt).text)
 else:
-    st.info("Bridge Ready. Click 'Sync' to load your SMA Screener data.")
+    st.info("System Ready. Click the sidebar button to pull data from GID 1600033224.")
