@@ -3,5 +3,4 @@ pandas>=2.0.0
 numpy>=1.26.0
 requests>=2.31.0
 anthropic>=0.34.0
-scipy>=1.11.0
-google-generativeai>=0.8.0
+breeze-connect>=1.0.67
