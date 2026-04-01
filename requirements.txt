@@ -1,6 +1,7 @@
-streamlit
+numpy
 pandas
+streamlit
 yfinance
-numpy<2.0.0
+nsepython
 google-genai
-matplotlib
+requests
