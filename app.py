@@ -202,23 +202,49 @@ def calculate_metrics(df: pd.DataFrame, ticker: str) -> dict | None:
 # 5. HP FILTER (Kakushadze §trend smoothing)
 # =========================
 def hp_filter(series: np.ndarray, lam: float = 1400) -> np.ndarray:
-    """Hodrick-Prescott filter. Returns smoothed trend S*(t).
+    """Hodrick-Prescott filter — pure numpy band-diagonal solver.
     Minimises: Σ[S(t)-S*(t)]² + λ·Σ[S*(t+1)-2S*(t)+S*(t-1)]²
+    Uses the Whittaker smoother / banded Cholesky approach.
     """
     n = len(series)
     if n < 5:
         return series.copy()
-    from scipy.sparse import diags, eye
-    from scipy.sparse.linalg import spsolve
     try:
-        I = eye(n, format="csc")
-        ones = np.ones(n - 2)
-        D = diags([ones, -2*ones, ones], [0, 1, 2], shape=(n-2, n), format="csc")
-        trend = spsolve((I + lam * D.T @ D), series)
+        # Build the band-diagonal system (I + λ D'D) x = y
+        # D is the 2nd-difference matrix (n-2) × n
+        # D'D is n × n with bandwidth 5 (diagonals 0, ±1, ±2)
+        d0 = np.full(n, 1.0)
+        d1 = np.zeros(n)
+        d2 = np.zeros(n)
+
+        # D'D contributions
+        d0[0]  += lam;       d0[1]  += 5*lam;     d2[2:]  += lam
+        d0[-1] += lam;       d0[-2] += 5*lam
+        d0[2:-2] += 6 * lam
+
+        d1[0] = -2 * lam;    d1[-2] = -2 * lam
+        d1[1:-1] = -4 * lam
+
+        d2[0] = lam
+        d2[1] = lam
+
+        # Build full symmetric tridiagonal-pentadiagonal matrix
+        A = np.diag(d0)
+        for i in range(n - 1):
+            A[i, i+1] = d1[i]
+            A[i+1, i] = d1[i]
+        for i in range(n - 2):
+            A[i, i+2] = d2[i]
+            A[i+2, i] = d2[i]
+
+        trend = np.linalg.solve(A, series)
         return trend
     except Exception:
-        # Fallback: simple moving average
-        return pd.Series(series).rolling(20, min_periods=1).mean().values
+        # Fallback: weighted moving average
+        w = np.minimum(np.arange(1, 21), np.arange(20, 0, -1)).astype(float)
+        w /= w.sum()
+        padded = np.pad(series, (10, 10), mode='edge')
+        return np.array([np.dot(w, padded[i:i+20]) for i in range(n)])
 
 # =========================
 # 6. MARKET REGIME
@@ -419,7 +445,7 @@ def knn_predict(ticker: str, k: int = 5, lookback: int = 5) -> dict | None:
 # ── CSS ──────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-[data-testid="stSidebar"] { background: #0a0a0a; }
+
 .strategy-card {
     background: #111; border: 1px solid #ff6600; border-radius:4px;
     padding: 10px 14px; margin-bottom: 8px; cursor: pointer;
@@ -557,11 +583,7 @@ if "scan_df" in st.session_state:
         hp_df = df[["Ticker","Sector","Price","CHG%","HP_Signal","HP_Slope","MA 50","MA 200","ADX"]].copy()
         hp_df = hp_df.sort_values("HP_Slope", ascending=False)
         hp_df["HP_Slope"] = hp_df["HP_Slope"].apply(lambda x: f"+{x:.4f}" if x >= 0 else f"{x:.4f}")
-        def hp_highlight(row):
-            if row["HP_Signal"] == "ABOVE TREND":
-                return ["background-color: #001a00"] * len(row)
-            return ["background-color: #1a0000"] * len(row)
-        st.dataframe(hp_df.style.apply(hp_highlight, axis=1), hide_index=True, use_container_width=True)
+        st.dataframe(hp_df, hide_index=True, use_container_width=True)
 
     # ─ TAB 2: IBS ──────────────────────────────────────────────────────────
     with tabs[2]:
