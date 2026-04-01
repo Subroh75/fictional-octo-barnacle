@@ -7,10 +7,9 @@ import pandas as pd
 from google import genai
 import requests
 import io
-from datetime import datetime
 
-# --- 1. SYSTEM CONFIGURATION ---
-st.set_page_config(page_title="Nifty Sniper Elite v16.1", layout="wide")
+# --- 1. CONFIG ---
+st.set_page_config(page_title="Nifty Sniper Elite v16.3", layout="wide")
 
 def get_ai_client():
     try:
@@ -21,13 +20,12 @@ def get_ai_client():
 
 client = get_ai_client()
 
-# --- 2. VISUAL STYLING ENGINE ---
 def highlight_reco(val):
-    # Professional 2026 Color Palette
+    if not isinstance(val, str): return ''
     color = '#2ecc71' if 'BUY' in val else '#e74c3c' if 'SELL' in val else '#f1c40f'
     return f'background-color: {color}; color: black; font-weight: bold'
 
-# --- 3. LIVE NIFTY 500 CONSTITUENT FETCH ---
+# --- 2. LIVE NIFTY 500 FETCH ---
 @st.cache_data(ttl=86400)
 def get_live_nifty_500():
     try:
@@ -39,107 +37,72 @@ def get_live_nifty_500():
         sectors = dict(zip(df_n500['Symbol'] + ".NS", df_n500['Industry']))
         return symbols, sectors
     except:
-        core = ["BIOCON.NS", "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ADANIPOWER.NS"]
-        return core, {s: "Core Market" for s in core}
+        core = ["BIOCON.NS", "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS"]
+        return core, {s: "Core" for s in core}
 
-# --- 4. THE FULL MATH ENGINE ---
-def calculate_metrics(df, ticker):
-    try:
-        if isinstance(df.columns, pd.MultiIndex):
-            if ticker in df.columns.get_level_values(1):
-                df = df.xs(ticker, level=1, axis=1)
-            else:
-                df.columns = df.columns.get_level_values(0)
+# --- 3. THE BATCH MATH ENGINE ---
+def process_batch_data(raw_data, symbols, sectors):
+    all_results = []
+    for t in symbols:
+        try:
+            # Surgical extraction from MultiIndex
+            df = raw_data.xs(t, level=1, axis=1).copy()
+            df.columns = [str(c).capitalize() for c in df.columns]
+            df = df.dropna()
+            
+            if len(df) < 200: continue
+            
+            c, h, l, v = df['Close'].values, df['High'].values, df['Low'].values, df['Volume'].values
+            m20, m50, m200 = np.mean(c[-20:]), np.mean(c[-50:]), np.mean(c[-200:])
+            
+            # ADX Calculation
+            tr = pd.concat([pd.Series(h-l), abs(h-pd.Series(c).shift(1)), abs(l-pd.Series(c).shift(1))], axis=1).max(axis=1)
+            atr = tr.rolling(14).mean().iloc[-1]
+            z = (c[-1] - m20) / np.std(c[-20:])
+            vol_s = v[-1] / np.mean(v[-20:])
+            p_chg = (c[-1] - c[-2]) / c[-2]
+            
+            miro = 2 + (5 if vol_s > 2.0 else 0) + (3 if p_chg > 0.01 else 0)
+            reco = "🚀 STRONG BUY" if p_chg > 0.02 and vol_s > 2.2 else "🛑 STRONG SELL" if p_chg < -0.02 and vol_s > 2.2 else "🪃 REVERSION BUY" if z < -2.2 else "💤 NEUTRAL"
+            
+            all_results.append({
+                "Ticker": t, "Sector": sectors.get(t, "Misc"), "Price": round(c[-1], 2),
+                "Recommendation": reco, "Miro_Score": miro, "Z-Score": round(z, 2),
+                "MA 50": round(m50, 2), "MA 200": round(m200, 2), "Vol_Surge": round(vol_s, 2), "ATR": round(atr, 2)
+            })
+        except: continue
+    return pd.DataFrame(all_results)
 
-        df.columns = [str(c).capitalize() for c in df.columns]
-        c, h, l, v = df['Close'].values.flatten(), df['High'].values.flatten(), df['Low'].values.flatten(), df['Volume'].values.flatten()
-        
-        if len(c) < 200: return None
-
-        m20, m50, m200 = np.mean(c[-20:]), np.mean(c[-50:]), np.mean(c[-200:])
-        tr = pd.concat([pd.Series(h-l), abs(h-pd.Series(c).shift(1)), abs(l-pd.Series(c).shift(1))], axis=1).max(axis=1)
-        atr = tr.rolling(14).mean().iloc[-1]
-        
-        plus_dm = np.where((pd.Series(h).diff() > pd.Series(l).diff(periods=-1)), np.clip(pd.Series(h).diff(), 0, None), 0)
-        minus_dm = np.where((pd.Series(l).diff(periods=-1) > pd.Series(h).diff()), np.clip(pd.Series(l).diff(periods=-1), 0, None), 0)
-        tr_smooth = tr.rolling(14).mean()
-        plus_di = 100 * (pd.Series(plus_dm).rolling(14).mean() / tr_smooth)
-        minus_di = 100 * (pd.Series(minus_dm).rolling(14).mean() / tr_smooth)
-        dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
-        adx = dx.rolling(14).mean().iloc[-1]
-        
-        z_score = (c[-1] - m20) / np.std(c[-20:])
-        vol_surge = v[-1] / np.mean(v[-20:])
-        p_chg = (c[-1] - c[-2]) / c[-2]
-        
-        miro = 2 + (5 if vol_surge > 2.0 else 0) + (3 if p_chg > 0.01 else 0)
-        reco = "🚀 STRONG BUY" if p_chg > 0.02 and vol_surge > 2.2 else "🛑 STRONG SELL" if p_chg < -0.02 and vol_surge > 2.2 else "🪃 REVERSION BUY" if z_score < -2.2 else "💤 NEUTRAL"
-
-        return {"cp": c[-1], "m20": m20, "m50": m50, "m200": m200, "adx": round(adx, 1), "z": round(z_score, 2), "vol": round(vol_surge, 2), "atr": atr, "reco": reco, "miro": miro}
-    except: return None
-
-# --- 5. INTERFACE & SIDEBAR ---
-st.sidebar.title("🏹 Nifty Sniper v16.1")
-st.sidebar.subheader("🏦 Mar 22, 2026 Pulse")
-st.sidebar.table(pd.DataFrame({"Metric": ["India VIX", "FII Net"], "Value": ["22.81", "🔴 SELLING"]}))
-
+# --- 4. INTERFACE ---
+st.sidebar.title("🏹 Nifty Sniper v16.3")
 scan_depth = st.sidebar.slider("Scan Depth", 50, 500, 500)
 
-if st.sidebar.button("🚀 EXECUTE FULL MARKET AUDIT"):
+if st.sidebar.button("🚀 EXECUTE BATCH SCAN"):
     symbols, sectors = get_live_nifty_500()
-    all_data = []
-    prog = st.progress(0, text="Deep Scanning Nifty 500...")
-    for i, t in enumerate(symbols[:scan_depth]):
-        prog.progress((i + 1) / len(symbols[:scan_depth]))
-        try:
-            raw = yf.download(t, period="2y", progress=False, auto_adjust=True)
-            m = calculate_metrics(raw, t)
-            if m:
-                all_data.append({"Ticker": t, "Sector": sectors.get(t, "Misc"), "Price": round(m['cp'], 2), "Recommendation": m['reco'], "Miro_Score": m['miro'], "Z-Score": m['z'], "ADX": m['adx'], "Vol_Surge": m['vol'], "MA 20": round(m['m20'], 2), "MA 50": round(m['m50'], 2), "MA 200": round(m['m200'], 2), "ATR": round(m['atr'], 2)})
-        except: continue
-    if all_data: st.session_state['v161_res'] = pd.DataFrame(all_data)
+    target_symbols = symbols[:scan_depth]
+    
+    with st.spinner(f"Requesting Institutional Data for {len(target_symbols)} stocks..."):
+        # THE BIG FIX: ONE REQUEST FOR ALL TICKERS
+        raw = yf.download(target_symbols, period="2y", interval="1d", group_by='column', auto_adjust=True, progress=False)
+        st.session_state['v163_res'] = process_batch_data(raw, target_symbols, sectors)
 
-# --- 6. TABS & TACTICAL LOGIC ---
-if 'v161_res' in st.session_state:
-    df = st.session_state['v161_res']
+if 'v163_res' in st.session_state:
+    df = st.session_state['v163_res']
     
     # Side Heatmap
-    above_200 = len(df[df['MA 200'] < df['Price']])
-    breadth = (above_200 / len(df)) * 100
-    st.sidebar.markdown("---")
+    breadth = (len(df[df['MA 200'] < df['Price']]) / len(df)) * 100
     st.sidebar.subheader("🌡️ Market Heatmap")
     if breadth > 60: st.sidebar.success(f"🔥 BULLISH ({round(breadth,1)}%)")
     elif breadth < 40: st.sidebar.error(f"❄️ BEARISH ({round(breadth,1)}%)")
     else: st.sidebar.warning(f"⚖️ NEUTRAL ({round(breadth,1)}%)")
 
-    tabs = st.tabs(["🎯 Miro Flow", "📈 Trend & ADX", "🪃 Reversion", "💎 Weekly Sniper", "🧬 Filing Audit", "🧠 Intelligence Lab"])
+    tabs = st.tabs(["🎯 Miro Flow", "📈 Trend & MA 50", "🪃 Reversion"])
     
     with tabs[0]:
-        st.subheader("🎯 Miro Momentum (Visualized)")
         st.dataframe(df[["Ticker", "Price", "Recommendation", "Miro_Score", "Vol_Surge"]].sort_values("Miro_Score", ascending=False).style.map(highlight_reco, subset=['Recommendation']), hide_index=True, use_container_width=True)
-        with st.expander("📘 TACTICAL LOGIC"): st.write("Miro Score (8-10): Institutional volume alignment with price action.")
-
     with tabs[1]:
-        st.subheader("📈 Trend & MA 50 (Visualized)")
-        st.dataframe(df[["Ticker", "Price", "Recommendation", "ADX", "MA 20", "MA 50", "MA 200"]].style.map(highlight_reco, subset=['Recommendation']), hide_index=True, use_container_width=True)
-        with st.expander("📘 TACTICAL LOGIC"): st.write("Perfect Alignment: Price > MA 50 > MA 200 with ADX > 25.")
-
+        st.dataframe(df[["Ticker", "Price", "Recommendation", "MA 50", "MA 200"]].style.map(highlight_reco, subset=['Recommendation']), hide_index=True, use_container_width=True)
     with tabs[2]:
-        st.subheader("🪃 Mean Reversion (Visualized)")
         st.dataframe(df[["Ticker", "Price", "Recommendation", "Z-Score"]].sort_values("Z-Score").style.map(highlight_reco, subset=['Recommendation']), hide_index=True, use_container_width=True)
-
-    with tabs[3]:
-        st.subheader("💎 Weekly Institutional Flow")
-        st.dataframe(df[["Ticker", "Price", "Recommendation", "Vol_Surge", "Sector"]].sort_values("Vol_Surge", ascending=False).style.map(highlight_reco, subset=['Recommendation']), hide_index=True, use_container_width=True)
-
-    with tabs[4]:
-        t_f = st.selectbox("Select Asset for Audit", df['Ticker'].tolist())
-        if st.button("🔍 Run Audit"):
-            st.markdown(client.models.generate_content(model="gemini-2.5-flash", contents=f"Audit {t_f} March 2026 filings.").text)
-
-    with tabs[5]:
-        t_i = st.selectbox("Select Asset for Debate", df['Ticker'].tolist())
-        if st.button("⚖️ Summon Council"):
-            st.markdown(client.models.generate_content(model="gemini-2.5-flash", contents=f"4-agent debate for {t_i} Mar 22, 2026.").text)
 else:
-    st.info("Scanner Ready.")
+    st.info("Click 'EXECUTE BATCH SCAN' to pull all 500 stocks at once.")
