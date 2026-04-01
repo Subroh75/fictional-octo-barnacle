@@ -9,6 +9,11 @@ import json
 import time
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
+try:
+    from breeze_connect import BreezeConnect
+    BREEZE_AVAILABLE = True
+except ImportError:
+    BREEZE_AVAILABLE = False
 from anthropic import Anthropic
 
 # =========================
@@ -31,9 +36,134 @@ def get_anthropic_client():
         pass
     return None
 
+
+@st.cache_resource
+def get_breeze_client():
+    """Initialise Breeze SDK — cached for the session lifetime."""
+    if not BREEZE_AVAILABLE:
+        return None
+    try:
+        app_key    = st.secrets.get("BREEZE_APP_KEY", "")
+        secret_key = st.secrets.get("BREEZE_SECRET_KEY", "")
+        session_tk = st.secrets.get("BREEZE_SESSION_TOKEN", "")
+        if not all([app_key, secret_key, session_tk]):
+            return None
+        breeze = BreezeConnect(api_key=app_key)
+        breeze.generate_session(api_secret=secret_key, session_token=session_tk)
+        return breeze
+    except Exception as e:
+        st.warning(f"Breeze init failed: {e} — falling back to Yahoo Finance")
+        return None
+
 # =========================
 # 2. YAHOO FINANCE — DIRECT HTTP (no npm, no bridge)
 # =========================
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_candles_breeze(symbol: str) -> pd.DataFrame:
+    """Fetch 2y daily OHLCV from ICICI Breeze API (official NSE data).
+    symbol = bare NSE code e.g. 'RELIANCE' (no .NS suffix).
+    """
+    breeze = get_breeze_client()
+    if breeze is None:
+        return pd.DataFrame()
+    try:
+        to_dt   = datetime.now()
+        from_dt = to_dt - timedelta(days=730)
+        resp = breeze.get_historical_data_v2(
+            interval     = "1day",
+            from_date    = from_dt.strftime("%Y-%m-%dT07:00:00.000Z"),
+            to_date      = to_dt.strftime("%Y-%m-%dT07:00:00.000Z"),
+            stock_code   = symbol,
+            exchange_code= "NSE",
+            product_type = "cash",
+        )
+        if not resp or resp.get("Status") != 200:
+            return pd.DataFrame()
+        rows = resp.get("Success", [])
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows)
+        df = df.rename(columns={
+            "datetime": "date", "open": "Open", "high": "High",
+            "low": "Low", "close": "Close", "volume": "Volume"
+        })
+        df["date"]   = pd.to_datetime(df["date"], errors="coerce")
+        df["Open"]   = pd.to_numeric(df["Open"],   errors="coerce")
+        df["High"]   = pd.to_numeric(df["High"],   errors="coerce")
+        df["Low"]    = pd.to_numeric(df["Low"],    errors="coerce")
+        df["Close"]  = pd.to_numeric(df["Close"],  errors="coerce")
+        df["Volume"] = pd.to_numeric(df["Volume"], errors="coerce").fillna(0)
+        df = df.dropna(subset=["Close"]).sort_values("date").reset_index(drop=True)
+        return df[["date","Open","High","Low","Close","Volume"]]
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def fetch_live_quote_breeze(symbol: str) -> dict | None:
+    """Fetch real-time quote from Breeze for a single stock."""
+    breeze = get_breeze_client()
+    if breeze is None:
+        return None
+    try:
+        resp = breeze.get_quotes(
+            stock_code   = symbol,
+            exchange_code= "NSE",
+            expiry_date  = "",
+            product_type = "cash",
+            right        = "",
+            strike_price = "",
+        )
+        if resp and resp.get("Status") == 200:
+            s = resp["Success"][0] if resp.get("Success") else {}
+            return {
+                "ltp":    float(s.get("ltp", 0) or 0),
+                "open":   float(s.get("open", 0) or 0),
+                "high":   float(s.get("high52week", 0) or 0),
+                "low":    float(s.get("low52week",  0) or 0),
+                "volume": int(s.get("total_quantity_traded", 0) or 0),
+                "change": float(s.get("net_change_absolute", 0) or 0),
+                "chg_pct":float(s.get("net_change_percentage", 0) or 0),
+            }
+    except Exception:
+        pass
+    return None
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_holdings_breeze() -> pd.DataFrame:
+    """Fetch actual demat holdings from Breeze."""
+    breeze = get_breeze_client()
+    if breeze is None:
+        return pd.DataFrame()
+    try:
+        resp = breeze.get_demat_holdings()
+        if resp and resp.get("Status") == 200:
+            rows = resp.get("Success", [])
+            if rows:
+                df = pd.DataFrame(rows)
+                df = df.rename(columns={
+                    "stock_code": "Symbol", "quantity": "Qty",
+                    "average_price": "Avg Price", "current_market_price": "LTP",
+                    "stcg_pnl": "STCG P&L",
+                })
+                for col in ["Qty","Avg Price","LTP"]:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+                return df
+    except Exception:
+        pass
+    return pd.DataFrame()
+
+
+def fetch_candles_smart(symbol: str) -> pd.DataFrame:
+    """Try Breeze first, fall back to Yahoo Finance automatically."""
+    df = fetch_candles_breeze(symbol)
+    if df.empty:
+        df = fetch_candles_yf(symbol + ".NS")
+    return df
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_candles_yf(ticker_ns: str) -> pd.DataFrame:
     """Fetch 2y daily OHLCV from Yahoo Finance v8 API directly."""
@@ -273,7 +403,7 @@ def _fetch_one(args):
     """Worker: fetch + compute metrics for one symbol. Runs in thread pool."""
     sym, sector_map = args
     try:
-        df = fetch_candles_yf(sym + ".NS")
+        df = fetch_candles_smart(sym)
         m  = calculate_metrics(df, sym)
         if m:
             return {
@@ -534,6 +664,12 @@ with st.sidebar:
     }
     st.info(guides.get(strategy_key, ""))
     st.markdown("---")
+    breeze_ok = get_breeze_client() is not None
+    if breeze_ok:
+        st.success("🟢 Breeze API connected — live NSE data")
+    else:
+        st.warning("🟡 Yahoo Finance mode — add Breeze secrets for live NSE data")
+    st.markdown("---")
     st.markdown("<small>⚠️ Not SEBI registered · Not buy/sell advice</small>", unsafe_allow_html=True)
 
 # ── SCAN TRIGGER ─────────────────────────────────────────────────────────────
@@ -594,6 +730,7 @@ if "scan_df" in st.session_state:
         "⚖️ Pairs Trading",
         "🧠 AI Council",
         "🛡️ Risk Lab",
+        "💼 My Holdings",
     ])
 
     # ─ TAB 0: MIRO ─────────────────────────────────────────────────────────
@@ -760,13 +897,67 @@ ANTHROPIC_API_KEY = "sk-ant-..."
         total_trades = len(risk_df[risk_df["Qty"] > 0])
         st.info(f"**{total_trades} tradeable** | SL multiplier: {sl_mult}× ATR | Max loss/trade: ₹{risk_per_trade:,}")
 
+    # ─ TAB 10: HOLDINGS ────────────────────────────────────────────────────
+    with tabs[10]:
+        st.subheader("💼 My Demat Holdings — Live from Breeze")
+        breeze_active = get_breeze_client() is not None
+        if not breeze_active:
+            st.info("Add `BREEZE_APP_KEY`, `BREEZE_SECRET_KEY` and `BREEZE_SESSION_TOKEN` to Streamlit secrets to see your live holdings here.")
+        else:
+            if st.button("🔄 Refresh Holdings", key="holdings_refresh"):
+                st.cache_data.clear()
+            with st.spinner("Fetching your demat holdings from ICICI Direct..."):
+                holdings_df = fetch_holdings_breeze()
+            if holdings_df.empty:
+                st.warning("No holdings found or session token expired. Regenerate your session token and update Streamlit secrets.")
+            else:
+                # Enrich with live quotes
+                live_prices = {}
+                if "Symbol" in holdings_df.columns:
+                    with st.spinner("Fetching live prices..."):
+                        for sym in holdings_df["Symbol"].tolist():
+                            q = fetch_live_quote_breeze(str(sym))
+                            if q:
+                                live_prices[sym] = q.get("ltp", 0)
+
+                if live_prices:
+                    holdings_df["Live Price"] = holdings_df["Symbol"].map(live_prices).fillna(0)
+                    if "Qty" in holdings_df.columns and "Avg Price" in holdings_df.columns:
+                        holdings_df["Cost"]    = (holdings_df["Qty"] * holdings_df["Avg Price"]).round(2)
+                        holdings_df["Value"]   = (holdings_df["Qty"] * holdings_df["Live Price"]).round(2)
+                        holdings_df["P&L"]     = (holdings_df["Value"] - holdings_df["Cost"]).round(2)
+                        holdings_df["P&L %"]   = ((holdings_df["P&L"] / holdings_df["Cost"].replace(0,1)) * 100).round(2)
+
+                        total_cost  = holdings_df["Cost"].sum()
+                        total_value = holdings_df["Value"].sum()
+                        total_pnl   = total_value - total_cost
+                        pnl_pct     = (total_pnl / total_cost * 100) if total_cost else 0
+
+                        h1, h2, h3, h4 = st.columns(4)
+                        h1.metric("Portfolio Value", f"₹{total_value:,.0f}")
+                        h2.metric("Total Cost",      f"₹{total_cost:,.0f}")
+                        h3.metric("Total P&L",       f"₹{total_pnl:,.0f}", f"{pnl_pct:+.2f}%")
+                        h4.metric("Holdings",        len(holdings_df))
+
+                st.dataframe(holdings_df, hide_index=True, use_container_width=True)
+
+                # Cross-check with scan results — which holdings have signals?
+                if "Symbol" in holdings_df.columns:
+                    my_syms = set(holdings_df["Symbol"].str.upper().tolist())
+                    scan_signals = df[df["Ticker"].isin(my_syms)][["Ticker","Price","Recommendation","Miro_Score","Z-Score","ADX","HP_Signal"]]
+                    if not scan_signals.empty:
+                        st.markdown("#### 📊 Signals on Your Holdings")
+                        st.dataframe(scan_signals, hide_index=True, use_container_width=True)
+
 else:
+    # ── WELCOME SCREEN ────────────────────────────────────────────────────else:
     # ── WELCOME SCREEN ────────────────────────────────────────────────────
     st.markdown("""
     ### Welcome to Nifty Sniper Elite v12.0
 
     **What's new in v12.0:**
-    - ✅ Direct Yahoo Finance — no local bridge required, deploys anywhere
+    - ✅ **Breeze API** (ICICI Direct) — official live NSE data when credentials present
+    - ✅ Yahoo Finance fallback — works without Breeze credentials
     - ✅ HP Filter (Hodrick-Prescott, λ=1400) for trend smoothing
     - ✅ IBS (Internal Bar Strength) mean reversion signals
     - ✅ Donchian Channel 20-day breakout detection
