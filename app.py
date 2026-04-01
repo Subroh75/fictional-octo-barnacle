@@ -1,121 +1,175 @@
-import streamlit as st
-import pandas as pd
 import numpy as np
-from statsmodels.tsa.filters.hp_filter import hpfilter
-from sklearn.neighbors import NearestNeighbors
+if not hasattr(np, 'bool8'): np.bool8 = np.bool_
 
-def render_quant_sidebar(df, current_price):
-    """
-    Implements '151 Trading Strategies' Quant Layers into the Nifty Sniper Sidebar.
-    Expects a DataFrame 'df' with ['close', 'high', 'low', 'volume'] columns.
-    """
-    st.sidebar.markdown("# 🎯 Quant Strategy Lab")
-    st.sidebar.info("These tools provide a mathematical 'overlay' to validate your manual setups. Use them to filter out noise and confirm high-probability zones.")
-    st.sidebar.markdown("---")
+import streamlit as st
+import yfinance as yf
+import pandas as pd
+from google import genai
+import os
+from datetime import datetime
 
-    # --- 1. HP FILTER (TREND REFINER) ---
-    st.sidebar.subheader("📡 Trend Refiner (HP)")
-    hp_expander = st.sidebar.expander("Logic: How it works")
-    hp_expander.write("""
-        **The Math:** It separates the 'Trend' from high-frequency 'Noise' by minimizing price curvature.
-        **The Goal:** To ignore 1-minute 'fake-outs' and only trade when the core institutional trend is in your favor.
-    """)
-    
-    if st.sidebar.checkbox("Enable HP Noise Filter", value=True):
-        # Lambda 12800 is a standard quantitative setting for intraday data
-        # It provides a 'smooth' line that resists minor price stutters
-        cycle, trend = hpfilter(df['close'], lamb=12800)
-        latest_trend = trend.iloc[-1]
-        
-        if current_price > latest_trend:
-            st.sidebar.success(f"HP STATUS: BULLISH\n(Price is above the core trend)")
-        else:
-            st.sidebar.error(f"HP STATUS: BEARISH\n(Price is below the core trend)")
+# --- 1. SYSTEM CONFIGURATION ---
+st.set_page_config(page_title="Nifty Sniper Elite v10.0", layout="wide")
 
-    # --- 2. IBS (MEAN REVERSION) ---
-    st.sidebar.subheader("🔄 Mean Reversion (IBS)")
-    ibs_expander = st.sidebar.expander("Logic: How it works")
-    ibs_expander.write("""
-        **The Math:** (Current - Daily Low) / (Daily High - Daily Low).
-        **The Goal:** To see how 'stretched' the price is. 
-        - **0.0 to 0.2:** Oversold 'Snipe' zone (Expect a bounce).
-        - **0.8 to 1.0:** Overbought zone (Expect a cooldown).
-    """)
-    
-    day_high = df['high'].max()
-    day_low = df['low'].min()
-    
-    # Calculate IBS (Internal Bar Strength)
-    if day_high != day_low:
-        ibs = (current_price - day_low) / (day_high - day_low)
-    else:
-        ibs = 0.5
-        
-    st.sidebar.write(f"**Current IBS Score: {ibs:.2f}**")
-    st.sidebar.progress(float(np.clip(ibs, 0.0, 1.0)))
-    
-    if ibs < 0.2:
-        st.sidebar.warning("⚠️ SNIPE ALERT: Price is at extreme daily lows. Potential Reversal.")
-    elif ibs > 0.8:
-        st.sidebar.warning("⚠️ CAUTION: Price is at extreme daily highs. Avoid chasing.")
+def get_ai_client():
+    try:
+        if "GEMINI_API_KEY" in st.secrets:
+            return genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+        return None
+    except: return None
 
-    # --- 3. KNN (HISTORICAL PATTERN MATCHING) ---
-    st.sidebar.subheader("🧠 Intelligence Lab (KNN)")
-    knn_expander = st.sidebar.expander("Logic: How it works")
-    knn_expander.write("""
-        **The Math:** K-Nearest Neighbors (Euclidean Distance).
-        **The Goal:** It scans the last 1,000 bars of history to find the 3 times the market moved exactly like it is moving right now.
-        **The Result:** It tells you if the 'Historical Twins' resulted in a move Up or Down.
-    """)
-    
-    if len(df) > 60:
-        # We look at the last 5 bars of price and volume as a 'pattern'
-        lookback = 5
-        current_pattern = df[['close', 'volume']].tail(lookback).values.flatten().reshape(1, -1)
-        
-        # Prepare historical patterns to search through
-        history_features = []
-        history_outcomes = []
-        
-        # We stop 5 bars early to see what the 'outcome' was after the pattern
-        for i in range(len(df) - (lookback + 5)):
-            pattern = df[['close', 'volume']].iloc[i : i + lookback].values.flatten()
-            # Did the price go up or down 5 bars later?
-            outcome = 1 if df['close'].iloc[i + lookback + 5] > df['close'].iloc[i + lookback] else 0
-            history_features.append(pattern)
-            history_outcomes.append(outcome)
-        
-        # Fit KNN
-        model = NearestNeighbors(n_neighbors=3, metric='euclidean')
-        model.fit(history_features)
-        
-        distances, indices = model.kneighbors(current_pattern)
-        
-        # Calculate how many of the 3 matches went 'Up'
-        up_moves = sum([history_outcomes[idx] for idx in indices[0]])
-        
-        if up_moves >= 2:
-            st.sidebar.write("✅ **History says: UP (Probable)**")
-        else:
-            st.sidebar.write("❌ **History says: DOWN (Probable)**")
-        st.sidebar.caption(f"Pattern Confidence: {int((up_moves/3)*100)}%")
+client = get_ai_client()
 
-    # --- 4. THE GATEKEEPER (COST PROTECTOR) ---
-    st.sidebar.subheader("🛡️ The Gatekeeper")
-    gate_expander = st.sidebar.expander("Logic: How it works")
-    gate_expander.write("""
-        **The Math:** (Projected Profit %) - (Total Transaction Costs %).
-        **The Goal:** To prevent 'Ghost Profits.' If the move isn't big enough to cover your taxes and brokerage, the trade is mathematically a loss before you even start.
-    """)
+# --- 2. THE MARKET WEATHER STATION (Regime Logic) ---
+def get_market_regime(df):
+    if df.empty: return "📡 OFFLINE", "Initialize Scan", "info"
+    total = len(df)
+    above_200 = len(df[df['MA 200'] < df['Price']])
+    panic_stocks = len(df[df['Z-Score'] < -2.2])
+    breadth = (above_200 / total) * 100
+    panic_pct = (panic_stocks / total) * 100
     
-    target_move = st.sidebar.slider("Expected Move (%)", 0.1, 2.0, 0.5)
+    if breadth > 60: return "🔥 BULL REGIME", "Focus on Miro Breakouts", "success"
+    elif breadth < 40 and panic_pct > 15: return "😱 PANIC REGIME", "Focus on Mean Reversion", "error"
+    elif breadth < 40: return "❄️ BEAR REGIME", "Capital Preservation / Defensive", "warning"
+    else: return "⚖️ NEUTRAL", "Selective Sector Rotation", "info"
+
+# --- 3. THE "UNSHRUNK" MATH ENGINE ---
+def calculate_metrics(df, ticker):
+    try:
+        # 2026 MultiIndex Flattening Logic
+        if isinstance(df.columns, pd.MultiIndex):
+            if ticker in df.columns.get_level_values(1):
+                df = df.xs(ticker, level=1, axis=1)
+            else:
+                df.columns = df.columns.get_level_values(0)
+
+        df.columns = [str(c).capitalize() for c in df.columns]
+        c = df['Close'].values.flatten()
+        h, l = df['High'].values.flatten(), df['Low'].values.flatten()
+        v = df['Volume'].values.flatten()
+        
+        if len(c) < 200: return None
+
+        # Technical Indicators
+        m20, m50, m200 = np.mean(c[-20:]), np.mean(c[-50:]), np.mean(c[-200:])
+        tr = pd.concat([pd.Series(h-l), abs(h-pd.Series(c).shift(1)), abs(l-pd.Series(c).shift(1))], axis=1).max(axis=1)
+        atr = tr.rolling(14).mean()
+        
+        # ADX Calculation
+        plus_di = 100 * (np.clip(pd.Series(h).diff(), 0, None).rolling(14).mean() / atr)
+        minus_di = 100 * (np.clip((-pd.Series(l).diff()), 0, None).rolling(14).mean() / atr)
+        adx = ((abs(plus_di - minus_di) / (plus_di + minus_di)) * 100).rolling(14).mean().iloc[-1]
+        
+        z = (c[-1] - m20) / np.std(c[-20:])
+        vol_surge = v[-1] / np.mean(v[-20:])
+        p_chg = (c[-1] - c[-2]) / c[-2]
+        
+        # Miro Score Logic (0-10)
+        miro = 2
+        if vol_surge > 2.0: miro += 5
+        if p_chg > 0.01: miro += 3
+
+        # Recommendation Logic
+        reco = "🚀 STRONG BUY" if p_chg > 0.02 and vol_surge > 2.2 else "🪃 REVERSION" if z < -2.2 else "💤 NEUTRAL"
+
+        return {
+            "cp": c[-1], "m20": m20, "m50": m50, "m200": m200, 
+            "adx": round(adx, 1), "z": round(z, 2), "vol": round(vol_surge, 2), 
+            "atr": atr.iloc[-1], "reco": reco, "miro": miro
+        }
+    except: return None
+
+# --- 4. THE SCANNER ---
+@st.cache_data(ttl=3600)
+def run_master_scan(limit):
+    try:
+        url = 'https://archives.nseindia.com/content/indices/ind_nifty500list.csv'
+        n500 = pd.read_csv(url)
+        symbols = [s + ".NS" for s in n500['Symbol'].tolist()]
+        sector_map = dict(zip(n500['Symbol'] + ".NS", n500['Industry']))
+    except:
+        symbols = ["BIOCON.NS", "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "ESCORTS.NS", "360ONE.NS"]
+        sector_map = {s: "Misc" for s in symbols}
+
+    all_data = []
+    prog = st.progress(0, text="Deep Market Audit...")
+    for i, t in enumerate(symbols[:limit]):
+        prog.progress((i + 1) / limit)
+        try:
+            raw = yf.download(t, period="2y", progress=False, auto_adjust=True)
+            m = calculate_metrics(raw, t)
+            if m:
+                all_data.append({
+                    "Ticker": t, "Sector": sector_map.get(t, "Misc"), "Price": round(m['cp'], 2), 
+                    "Recommendation": m['reco'], "Miro_Score": m['miro'], "Z-Score": m['z'], 
+                    "ADX Strength": m['adx'], "Vol_Surge": m['vol'], 
+                    "MA 20": round(m['m20'], 2), "MA 50": round(m['m50'], 2), 
+                    "MA 200": round(m['m200'], 2), "ATR": round(m['atr'], 2)
+                })
+        except: continue
+    return pd.DataFrame(all_data)
+
+# --- 5. INTERFACE ---
+# Sidebar: Official March 22, 2026 Pulse
+st.sidebar.subheader("🏦 2026 Institutional Pulse")
+st.sidebar.table(pd.DataFrame({
+    "Metric": ["Date", "India VIX", "FII Net (Cr)"], 
+    "Value": ["Mar 22, 2026", "22.81", "🔴 -5,518.40"]
+}))
+v_risk = st.sidebar.number_input("Risk Per Trade (INR)", value=5000)
+
+if st.sidebar.button("🚀 EXECUTE GLOBAL SCAN"):
+    res = run_master_scan(500)
+    if not res.empty: st.session_state['v10_res'] = res
+
+if 'v10_res' in st.session_state:
+    df = st.session_state['v10_res']
+    regime, advice, color = get_market_regime(df)
+    st.sidebar.markdown(f"### 🌡️ Market Weather: {regime}")
+    getattr(st.sidebar, color)(f"Strategy: {advice}")
+
+    # Risk Math
+    sl_mult = 3.0 if 22.81 > 20 else 2.0
+    df['Stop_Loss'] = df['Price'] - (sl_mult * df['ATR'])
+    df['Qty'] = (v_risk / (df['Price'] - df['Stop_Loss'])).replace([np.inf, -np.inf], 0).fillna(0).astype(int)
+
+    tabs = st.tabs(["🎯 Miro Flow", "📈 Trend & ADX", "🪃 Reversion", "🧬 Earnings Front-Runner", "🧠 Intelligence Lab", "🛡️ Risk Lab"])
     
-    # Approximate costs for Indian Market (Brokerage + STT + Slippage + GST)
-    fixed_costs = 0.15 
-    net_return = target_move - fixed_costs
+    with tabs[0]: # Miro Flow
+        st.subheader("Miro Flow (Momentum Leaderboard)")
+        st.dataframe(df[["Ticker", "Price", "Recommendation", "Miro_Score", "Vol_Surge", "Sector"]].sort_values("Miro_Score", ascending=False), hide_index=True, use_container_width=True)
     
-    if net_return <= 0:
-        st.sidebar.error(f"🛑 TRADE BLOCKED\nNet Return: {net_return:.2f}%")
-        st.sidebar.caption("Move is too small to cover execution costs.")
-    else:
-        st.sidebar.success(f"🟢 TRADE APPROVED\nNet Return: +{net_return:.2f}%")
+    with tabs[1]: # Trend & ADX
+        st.subheader("Structural Trend Analysis")
+        st.dataframe(df[["Ticker", "Price", "Recommendation", "ADX Strength", "MA 20", "MA 50", "MA 200"]], hide_index=True, use_container_width=True)
+        
+    with tabs[2]: # Reversion (FIXED)
+        st.subheader("Statistical Mean Reversion (Z-Score)")
+        st.dataframe(df[["Ticker", "Price", "Recommendation", "Z-Score"]].sort_values("Z-Score"), hide_index=True, use_container_width=True)
+
+    with tabs[3]: # Earnings
+        st.subheader("🧬 2026 Filing Audit")
+        t_e = st.selectbox("Select Asset", df['Ticker'].tolist(), key="e_box")
+        if st.button("🔍 Run Audit"):
+            prompt = f"Today is March 22, 2026. Audit {t_e} Reg 30 filings for 2026. For BIOCON, focus on the ₹4,150 Cr QIP (Jan 15), US FDA gSaxenda approval (Feb 24), and Q3 Net Profit of ₹144 Cr."
+            with st.spinner("Analyzing 2026 Filings..."):
+                st.markdown(client.models.generate_content(model="gemini-2.5-flash", contents=prompt).text)
+
+    with tabs[4]: # Intelligence Lab
+        st.subheader("🧠 2026 Tactical Debate")
+        t_i = st.selectbox("Select Asset", df['Ticker'].tolist(), key="i_box")
+        if st.button("⚖️ Summon Council"):
+            prompt = f"""
+            Today is March 22, 2026. Price: {df[df['Ticker']==t_i]['Price'].values[0]}. 
+            Debate {t_i} using 4 Agents: BULL (Fundamentals), BEAR (Skeptics), TECHNICAL (Chart), and RISK (Manager). 
+            Include VIX 22.81 context and March 31 integration deadlines if applicable.
+            """
+            with st.spinner("Council debating..."):
+                st.markdown(client.models.generate_content(model="gemini-2.5-flash", contents=prompt).text)
+
+    with tabs[5]: # Risk Lab
+        st.subheader("Execution Management")
+        st.dataframe(df[["Ticker", "Price", "Stop_Loss", "Qty", "ATR"]], hide_index=True, use_container_width=True)
+else:
+    st.info("Scanner Ready.")
