@@ -8,7 +8,7 @@ import io
 from google import genai
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Nifty Sniper v32.0 | Expanded", layout="wide")
+st.set_page_config(page_title="Nifty Sniper v33.0 | Deep Scanner", layout="wide")
 
 SHEET_ID = "1SX9P19bzXWNypttEnfil195B8H63tjAZIBfK8PW2q9Y"
 GID = "1600033224" 
@@ -22,7 +22,7 @@ def get_ai_client():
 
 client = get_ai_client()
 
-# --- 2. THE COLOUR ENGINE ---
+# --- 2. COLOUR CODING ENGINE ---
 def color_engine(val):
     if not isinstance(val, str): return ''
     v = val.lower()
@@ -32,104 +32,94 @@ def color_engine(val):
     if 'sell' in v: return 'background-color: #ff4500; color: white'
     return 'color: #f1c40f'
 
-# --- 3. DATA BRIDGE (SMART COLUMN HUNTER) ---
+# --- 3. THE DEEP SCAN ENGINE ---
 @st.cache_data(ttl=300)
-def fetch_expanded_data():
+def fetch_deep_scan():
     url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={GID}"
     try:
         response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
-        raw_text = response.text
-        full_df = pd.read_csv(io.StringIO(raw_text), header=None)
+        # We read the raw file to find the "STOCK" anchor
+        raw_df = pd.read_csv(io.StringIO(response.text), header=None)
         
-        # Find the row where the data actually starts
         h_idx = 0
-        for i, row in full_df.iterrows():
+        for i, row in raw_df.iterrows():
             if any("STOCK" in str(v).upper() for v in row.values):
                 h_idx = i
                 break
         
-        df = pd.read_csv(io.StringIO(raw_text), skiprows=h_idx)
+        # Read data with the correct header row
+        df = pd.read_csv(io.StringIO(response.text), skiprows=h_idx)
         df.columns = [str(c).strip() for c in df.columns]
         
-        # Identify SMA Columns (SMA1, SMA 2, SMA 3, etc.)
-        sma_cols = [c for c in df.columns if "SMA" in c.upper() and "SIGNAL" not in c.upper() and "RATING" not in c.upper()]
+        # --- FIXING THE "NA" BY POSITION ---
+        # 1. Find Ticker
+        stock_col = [c for c in df.columns if "STOCK" in c.upper()][0]
+        df['TICKER'] = df[stock_col].astype(str).str.split(':').str[-1]
         
-        # Ticker Cleanup
-        df['TICKER'] = df['STOCK'].astype(str).str.split(':').str[-1] if 'STOCK' in df.columns else "N/A"
+        # 2. Find Price
+        price_col = [c for c in df.columns if "PRICE" in c.upper()][0]
+        df['LTP'] = pd.to_numeric(df[price_col], errors='coerce')
         
-        # Numeric Change Calculation
-        if 'CHANGE %' in df.columns:
-            idx = list(df.columns).index('CHANGE %')
-            # Look at the column to the right of the arrow
-            df['CHG_VAL'] = pd.to_numeric(df.iloc[:, idx+1], errors='coerce')
-        else:
-            df['CHG_VAL'] = 0.0
-
+        # 3. Find Change % (It is usually 2 columns to the right of PRICE in this template)
+        p_idx = list(df.columns).index(price_col)
+        df['CHG_NUM'] = pd.to_numeric(df.iloc[:, p_idx + 2], errors='coerce')
+        
+        # 4. Find SMA Ratings & Signals
+        # We hunt for any column that contains 'Rating' or 'Signal'
+        rating_col = [c for c in df.columns if "RATING" in c.upper()][0]
+        df['SIGNAL'] = df[rating_col]
+        
+        # 5. Hunt for the 3 SMA numeric values (SMA1, SMA 2, SMA 3)
+        # In the Indzara template, these are usually columns 5, 6, and 7
+        df['MA20'] = pd.to_numeric(df.iloc[:, p_idx + 3], errors='coerce')
+        df['MA50'] = pd.to_numeric(df.iloc[:, p_idx + 4], errors='coerce')
+        df['MA200'] = pd.to_numeric(df.iloc[:, p_idx + 5], errors='coerce')
+        
         # Miro Score Logic
         df['MIRO'] = 0
-        df.loc[df['CHG_VAL'] > 1.5, 'MIRO'] += 5
-        if 'SMA Rating' in df.columns:
-            df.loc[df['SMA Rating'].str.contains('Buy', na=False), 'MIRO'] += 5
-            
-        return df, sma_cols
-    except Exception as e:
-        st.error(f"Sync Failed: {e}")
-        return pd.DataFrame(), []
-
-# --- 4. UI INTERFACE ---
-st.title("🏹 NIFTY SNIPER ORACLE v32.0")
-st.markdown("---")
-
-if st.sidebar.button("🚀 EXECUTE FULL SCALE SYNC"):
-    data, sma_list = fetch_expanded_data()
-    if not data.empty:
-        st.session_state['v32_data'] = data
-        st.session_state['v32_sma'] = sma_list
-
-if 'v32_data' in st.session_state:
-    df = st.session_state['v32_data']
-    sma_cols = st.session_state['v32_sma']
-    
-    # 📈 TOP BAR METRICS
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Total Stocks", len(df))
-    m2.metric("Top Mover", df.sort_values('CHG_VAL', ascending=False)['TICKER'].iloc[0])
-    m3.metric("Market Sentiment", "BULLISH" if df['CHG_VAL'].mean() > 0 else "BEARISH")
-
-    tabs = st.tabs(["🎯 Miro Momentum", "📈 Trend & MAs", "🧠 AI Strategy Lab"])
-    
-    with tabs[0]:
-        st.subheader("🎯 High-Conviction Miro Flow")
-        # Column selection for clean UI
-        cols = ['TICKER', 'PRICE', 'CHG_VAL', 'SMA Rating', 'MIRO']
-        avail = [c for c in cols if c in df.columns or c in ['TICKER', 'MIRO', 'CHG_VAL']]
+        df['MIRO'] += df['CHG_NUM'].apply(lambda x: 5 if x > 1.5 else 0)
+        df.loc[df['SIGNAL'].str.contains('Buy', na=False), 'MIRO'] += 5
         
-        st.dataframe(
-            df[avail].sort_values('MIRO', ascending=False).style.map(color_engine, subset=['SMA Rating'] if 'SMA Rating' in df.columns else []),
-            use_container_width=True, height=600
-        )
+        return df
+    except Exception as e:
+        st.error(f"Deep Scan Error: {e}")
+        return pd.DataFrame()
+
+# --- 4. INTERFACE ---
+st.title("🏹 Nifty Sniper v33.0 | Deep Scan")
+
+if st.sidebar.button("🚀 EXECUTE DEEP SYNC"):
+    data = fetch_deep_scan()
+    if not data.empty:
+        st.session_state['v33_res'] = data
+
+if 'v33_res' in st.session_state:
+    df = st.session_state['v33_res']
+    
+    # Dashboard Metrics
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Active Universe", len(df))
+    c2.metric("Mean Change", f"{round(df['CHG_NUM'].mean(), 2)}%")
+    c3.metric("Strongest", df.sort_values('MIRO', ascending=False)['TICKER'].iloc[0])
+
+    t1, t2, t3 = st.tabs(["🎯 Miro Flow", "📈 Trend Matrix", "⚖️ AI Council"])
+    
+    with t1:
+        # MOMENTUM VIEW
+        view = df[['TICKER', 'LTP', 'CHG_NUM', 'SIGNAL', 'MIRO']].copy()
+        view.columns = ['Ticker', 'Price', 'Change %', 'Signal', 'Miro']
+        st.dataframe(view.sort_values('Miro', ascending=False).style.map(color_engine, subset=['Signal']), use_container_width=True, height=500)
 
     with tabs[1]:
-        st.subheader("📈 Moving Average & Trend Matrix")
-        # We explicitly include the SMA columns we hunted for earlier
-        trend_cols = ['TICKER', 'PRICE'] + sma_cols + (['SMA Rating'] if 'SMA Rating' in df.columns else [])
-        st.dataframe(df[trend_cols], use_container_width=True, height=600)
+        # TREND VIEW
+        trend = df[['TICKER', 'LTP', 'MA20', 'MA50', 'MA200', 'SIGNAL']].copy()
+        st.dataframe(trend, use_container_width=True, height=500)
 
     with tabs[2]:
-        col_a, col_b = st.columns([1, 2])
-        with col_a:
-            t_f = st.selectbox("Select Asset", df['TICKER'].tolist())
-            do_audit = st.button("🔍 Run Forensic Audit")
-            do_debate = st.button("⚖️ Summon Council")
-        
-        with col_b:
-            if do_audit and client:
-                with st.spinner("AI Auditing..."):
-                    res = client.models.generate_content(model="gemini-2.5-flash", contents=f"Audit {t_f} trend.")
-                    st.markdown(res.text)
-            if do_debate and client:
-                with st.spinner("Council debating..."):
-                    res = client.models.generate_content(model="gemini-2.5-flash", contents=f"4-agent debate for {t_f}.")
-                    st.markdown(res.text)
+        ticker = st.selectbox("Select Asset", df['TICKER'].tolist())
+        if st.button("⚖️ Summon Council"):
+            if client:
+                prompt = f"Perform a strategic 4-agent debate for {ticker}. Current Signal: {df[df['TICKER']==ticker]['SIGNAL'].values[0]}."
+                st.markdown(client.models.generate_content(model="gemini-2.5-flash", contents=prompt).text)
 else:
-    st.info("System Offline. Click sidebar button to initialize Bridge.")
+    st.info("System Ready. Please Sync to pull the Indzara template data.")
