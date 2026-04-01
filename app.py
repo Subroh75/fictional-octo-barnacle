@@ -8,7 +8,7 @@ import io
 from google import genai
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Nifty Sniper v30.0 | Grand Oracle", layout="wide")
+st.set_page_config(page_title="Nifty Sniper v32.0 | Expanded", layout="wide")
 
 SHEET_ID = "1SX9P19bzXWNypttEnfil195B8H63tjAZIBfK8PW2q9Y"
 GID = "1600033224" 
@@ -22,116 +22,114 @@ def get_ai_client():
 
 client = get_ai_client()
 
-# --- 2. COLOUR CODING ENGINE ---
+# --- 2. THE COLOUR ENGINE ---
 def color_engine(val):
     if not isinstance(val, str): return ''
     v = val.lower()
-    if 'strong buy' in v: return 'background-color: #2ecc71; color: black; font-weight: bold'
-    if 'buy' in v: return 'background-color: #a9dfbf; color: black'
-    if 'strong sell' in v: return 'background-color: #e74c3c; color: white; font-weight: bold'
-    if 'sell' in v: return 'background-color: #f1948a; color: black'
-    if 'trending' in v or 'strong' in v: return 'color: #2ecc71; font-weight: bold'
+    if 'strong buy' in v: return 'background-color: #006400; color: white; font-weight: bold'
+    if 'buy' in v: return 'background-color: #228b22; color: white'
+    if 'strong sell' in v: return 'background-color: #8b0000; color: white; font-weight: bold'
+    if 'sell' in v: return 'background-color: #ff4500; color: white'
     return 'color: #f1c40f'
 
-# --- 3. THE UNIVERSAL DATA BRIDGE ---
+# --- 3. DATA BRIDGE (SMART COLUMN HUNTER) ---
 @st.cache_data(ttl=300)
-def fetch_oracle_data():
+def fetch_expanded_data():
     url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={GID}"
     try:
         response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
-        full_df = pd.read_csv(io.StringIO(response.text), header=None)
+        raw_text = response.text
+        full_df = pd.read_csv(io.StringIO(raw_text), header=None)
         
-        # Header Seeker
-        anchors = ['SYMBOL', 'STOCK', 'TICKER']
+        # Find the row where the data actually starts
         h_idx = 0
         for i, row in full_df.iterrows():
-            if any(str(v).strip().upper() in anchors for v in row.values):
+            if any("STOCK" in str(v).upper() for v in row.values):
                 h_idx = i
                 break
         
-        df = pd.read_csv(io.StringIO(response.text), skiprows=h_idx)
+        df = pd.read_csv(io.StringIO(raw_text), skiprows=h_idx)
         df.columns = [str(c).strip() for c in df.columns]
         
-        # Standardization
-        df['TICKER_FINAL'] = df['SYMBOL'] if 'SYMBOL' in df.columns else df['STOCK'] if 'STOCK' in df.columns else df.iloc[:,0]
-        df['DISPLAY_TICKER'] = df['TICKER_FINAL'].astype(str).str.split(':').str[-1]
+        # Identify SMA Columns (SMA1, SMA 2, SMA 3, etc.)
+        sma_cols = [c for c in df.columns if "SMA" in c.upper() and "SIGNAL" not in c.upper() and "RATING" not in c.upper()]
         
-        # Numeric Clean up for Miro Logic
-        if 'Change (%)' in df.columns:
-            df['CHG_VAL'] = pd.to_numeric(df['Change (%)'].astype(str).str.replace('%',''), errors='coerce')
-        else:
-            # Handle the "Next Column" logic if Change (%) is missing
+        # Ticker Cleanup
+        df['TICKER'] = df['STOCK'].astype(str).str.split(':').str[-1] if 'STOCK' in df.columns else "N/A"
+        
+        # Numeric Change Calculation
+        if 'CHANGE %' in df.columns:
             idx = list(df.columns).index('CHANGE %')
+            # Look at the column to the right of the arrow
             df['CHG_VAL'] = pd.to_numeric(df.iloc[:, idx+1], errors='coerce')
+        else:
+            df['CHG_VAL'] = 0.0
 
-        # Generate Fake/Simulated ADX & Z-Score based on Price/SMA if not in sheet
-        # (This keeps the UI "Full" until you add these columns to your Excel)
-        df['ADX'] = np.random.randint(15, 45, size=len(df))
-        df['Z_SCORE'] = np.random.uniform(-3, 3, size=len(df)).round(2)
-        
-        # Miro Score Integration
-        df['MIRO_SCORE'] = 2
-        df.loc[df['CHG_VAL'] > 1.5, 'MIRO_SCORE'] += 5
+        # Miro Score Logic
+        df['MIRO'] = 0
+        df.loc[df['CHG_VAL'] > 1.5, 'MIRO'] += 5
         if 'SMA Rating' in df.columns:
-            df.loc[df['SMA Rating'].str.contains('Buy', na=False), 'MIRO_SCORE'] += 3
+            df.loc[df['SMA Rating'].str.contains('Buy', na=False), 'MIRO'] += 5
             
-        return df
+        return df, sma_cols
     except Exception as e:
-        st.error(f"Bridge Sync Failed: {e}")
-        return pd.DataFrame()
+        st.error(f"Sync Failed: {e}")
+        return pd.DataFrame(), []
 
-# --- 4. INTERFACE ---
-st.sidebar.title("🏹 Nifty Sniper v30.0")
-if st.sidebar.button("🚀 EXECUTE ORACLE SYNC"):
-    data = fetch_oracle_data()
+# --- 4. UI INTERFACE ---
+st.title("🏹 NIFTY SNIPER ORACLE v32.0")
+st.markdown("---")
+
+if st.sidebar.button("🚀 EXECUTE FULL SCALE SYNC"):
+    data, sma_list = fetch_expanded_data()
     if not data.empty:
-        st.session_state['v30_res'] = data
+        st.session_state['v32_data'] = data
+        st.session_state['v32_sma'] = sma_list
 
-if 'v30_res' in st.session_state:
-    df = st.session_state['v30_res']
+if 'v32_data' in st.session_state:
+    df = st.session_state['v32_data']
+    sma_cols = st.session_state['v32_sma']
     
-    # Global Regime Metric
-    breadth = (len(df[df['CHG_VAL'] > 0]) / len(df)) * 100
-    st.sidebar.subheader("🌡️ Market Regime")
-    if breadth > 60: st.sidebar.success(f"BULLISH ({round(breadth,1)}%)")
-    else: st.sidebar.warning(f"CAUTIOUS ({round(breadth,1)}%)")
+    # 📈 TOP BAR METRICS
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Total Stocks", len(df))
+    m2.metric("Top Mover", df.sort_values('CHG_VAL', ascending=False)['TICKER'].iloc[0])
+    m3.metric("Market Sentiment", "BULLISH" if df['CHG_VAL'].mean() > 0 else "BEARISH")
 
-    tabs = st.tabs(["🎯 Miro Flow", "📈 Trend & ADX", "🪃 Reversion", "🧠 AI Intelligence", "⚖️ Tactical Debate"])
+    tabs = st.tabs(["🎯 Miro Momentum", "📈 Trend & MAs", "🧠 AI Strategy Lab"])
     
-    with tabs[0]: # MIRO FLOW
-        st.subheader("🎯 Momentum Leaderboard")
-        cols = ['DISPLAY_TICKER', 'PRICE', 'CHG_VAL', 'SMA Rating', 'MIRO_SCORE']
-        actual = [c for c in cols if c in df.columns]
-        st.dataframe(df[actual].sort_values("MIRO_SCORE", ascending=False).style.map(color_engine, subset=['SMA Rating'] if 'SMA Rating' in df.columns else []), use_container_width=True, hide_index=True)
+    with tabs[0]:
+        st.subheader("🎯 High-Conviction Miro Flow")
+        # Column selection for clean UI
+        cols = ['TICKER', 'PRICE', 'CHG_VAL', 'SMA Rating', 'MIRO']
+        avail = [c for c in cols if c in df.columns or c in ['TICKER', 'MIRO', 'CHG_VAL']]
+        
+        st.dataframe(
+            df[avail].sort_values('MIRO', ascending=False).style.map(color_engine, subset=['SMA Rating'] if 'SMA Rating' in df.columns else []),
+            use_container_width=True, height=600
+        )
 
-    with tabs[1]: # TREND & ADX
-        st.subheader("📈 Trend Strength (ADX + MAs)")
-        # Mapping your sheet's SMA1, SMA 2, SMA 3 to the UI
-        df['Trend_Status'] = df['ADX'].apply(lambda x: "STRONG TREND" if x > 25 else "SIDEWAYS")
-        cols = ['DISPLAY_TICKER', 'PRICE', 'SMA1', 'SMA 2', 'SMA 3', 'ADX', 'Trend_Status']
-        actual = [c for c in cols if c in df.columns or c in ['ADX', 'Trend_Status']]
-        st.dataframe(df[actual].style.map(color_engine, subset=['Trend_Status']), use_container_width=True, hide_index=True)
+    with tabs[1]:
+        st.subheader("📈 Moving Average & Trend Matrix")
+        # We explicitly include the SMA columns we hunted for earlier
+        trend_cols = ['TICKER', 'PRICE'] + sma_cols + (['SMA Rating'] if 'SMA Rating' in df.columns else [])
+        st.dataframe(df[trend_cols], use_container_width=True, height=600)
 
-    with tabs[2]: # REVERSION
-        st.subheader("🪃 Mean Reversion (Z-Score)")
-        st.write("Targeting Z-Score < -2.0 for 'Rubber Band' snapbacks.")
-        cols = ['DISPLAY_TICKER', 'PRICE', 'Z_SCORE', 'SMA Rating']
-        st.dataframe(df[cols].sort_values("Z_SCORE").style.map(color_engine, subset=['SMA Rating']), use_container_width=True, hide_index=True)
-
-    with tabs[3]: # AI LABS
-        t_f = st.selectbox("Select Asset for Audit", df['DISPLAY_TICKER'].tolist())
-        if st.button("🔍 Run Forensic Audit"):
-            if client:
-                prompt = f"Audit {t_f} as of April 2026. Ticker has SMA Rating: {df[df['DISPLAY_TICKER']==t_f]['SMA Rating'].values[0]}. Check for Sentiment Decay."
-                with st.spinner("Analyzing management tone..."):
-                    st.markdown(client.models.generate_content(model="gemini-2.5-flash", contents=prompt).text)
-
-    with tabs[4]: # TACTICAL DEBATE
-        t_d = st.selectbox("Select Asset for Debate", df['DISPLAY_TICKER'].tolist(), key="d_box")
-        if st.button("⚖️ Summon Council"):
-            if client:
-                prompt = f"4-agent debate for {t_d} on April 1, 2026. Include VIX 22.81 context."
-                with st.spinner("Council in session..."):
-                    st.markdown(client.models.generate_content(model="gemini-2.5-flash", contents=prompt).text)
+    with tabs[2]:
+        col_a, col_b = st.columns([1, 2])
+        with col_a:
+            t_f = st.selectbox("Select Asset", df['TICKER'].tolist())
+            do_audit = st.button("🔍 Run Forensic Audit")
+            do_debate = st.button("⚖️ Summon Council")
+        
+        with col_b:
+            if do_audit and client:
+                with st.spinner("AI Auditing..."):
+                    res = client.models.generate_content(model="gemini-2.5-flash", contents=f"Audit {t_f} trend.")
+                    st.markdown(res.text)
+            if do_debate and client:
+                with st.spinner("Council debating..."):
+                    res = client.models.generate_content(model="gemini-2.5-flash", contents=f"4-agent debate for {t_f}.")
+                    st.markdown(res.text)
 else:
-    st.info("Oracle Ready. Execute Sync to load your Private Data Bridge.")
+    st.info("System Offline. Click sidebar button to initialize Bridge.")
