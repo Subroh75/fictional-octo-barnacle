@@ -7,9 +7,10 @@ import pandas as pd
 from google import genai
 import requests
 import io
+import time
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Nifty Sniper Elite v16.4", layout="wide")
+st.set_page_config(page_title="Nifty Sniper Elite v16.5", layout="wide")
 
 def get_ai_client():
     try:
@@ -29,65 +30,79 @@ def highlight_reco(val):
 @st.cache_data(ttl=86400)
 def get_live_nifty_500():
     try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         url = "https://archives.nseindia.com/content/indices/ind_nifty500list.csv"
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=10)
         df_n500 = pd.read_csv(io.StringIO(response.text))
         symbols = [s + ".NS" for s in df_n500['Symbol'].tolist()]
         sectors = dict(zip(df_n500['Symbol'] + ".NS", df_n500['Industry']))
         return symbols, sectors
     except:
-        core = ["BIOCON.NS", "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "TATASTEEL.NS"]
+        # Emergency Core Watchlist
+        core = ["BIOCON.NS", "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "TATASTEEL.NS", "ADANIPOWER.NS"]
         return core, {s: "Core Market" for s in core}
 
-# --- 3. THE BATCH MATH ENGINE ---
-def process_batch_data(raw_data, symbols, sectors):
-    all_results = []
+# --- 3. THE CHUNKED MATH ENGINE ---
+def process_batch(raw_data, symbols, sectors):
+    batch_results = []
     for t in symbols:
         try:
-            df = raw_data.xs(t, level=1, axis=1).copy()
+            if t not in raw_data.columns.get_level_values(1): continue
+            df = raw_data.xs(t, level=1, axis=1).copy().dropna()
+            if len(df) < 100: continue
+            
             df.columns = [str(c).capitalize() for c in df.columns]
-            df = df.dropna()
-            if len(df) < 200: continue
-            
             c, h, l, v = df['Close'].values, df['High'].values, df['Low'].values, df['Volume'].values
-            m20, m50, m200 = np.mean(c[-20:]), np.mean(c[-50:]), np.mean(c[-200:])
             
-            # Indicators
+            m20, m50, m200 = np.mean(c[-20:]), np.mean(c[-50:]), np.mean(c[-200:])
             tr = pd.concat([pd.Series(h-l), abs(h-pd.Series(c).shift(1)), abs(l-pd.Series(c).shift(1))], axis=1).max(axis=1)
             atr = tr.rolling(14).mean().iloc[-1]
             z = (c[-1] - m20) / np.std(c[-20:])
             vol_s = v[-1] / np.mean(v[-20:])
             p_chg = (c[-1] - c[-2]) / c[-2]
             
-            # Miro Logic (Patented)
             miro = 2 + (5 if vol_s > 2.0 else 0) + (3 if p_chg > 0.01 else 0)
             reco = "🚀 STRONG BUY" if p_chg > 0.02 and vol_s > 2.2 else "🛑 STRONG SELL" if p_chg < -0.02 and vol_s > 2.2 else "🪃 REVERSION BUY" if z < -2.2 else "💤 NEUTRAL"
             
-            all_results.append({
+            batch_results.append({
                 "Ticker": t, "Sector": sectors.get(t, "Misc"), "Price": round(c[-1], 2),
                 "Recommendation": reco, "Miro_Score": miro, "Z-Score": round(z, 2),
                 "MA 50": round(m50, 2), "MA 200": round(m200, 2), "Vol_Surge": round(vol_s, 2), "ATR": round(atr, 2)
             })
         except: continue
-    return pd.DataFrame(all_results)
+    return batch_results
 
-# --- 4. INTERFACE & SIDEBAR ---
-st.sidebar.title("🏹 Nifty Sniper v16.4")
-st.sidebar.table(pd.DataFrame({"Metric": ["India VIX", "FII Bias"], "Value": ["22.81", "🔴 SELLING"]}))
+# --- 4. INTERFACE ---
+st.sidebar.title("🏹 Nifty Sniper v16.5")
+st.sidebar.info("System optimized for April 2026 Batch Audits.")
 scan_depth = st.sidebar.slider("Scan Depth", 50, 500, 500)
 
-if st.sidebar.button("🚀 EXECUTE FULL 500 BATCH SCAN"):
+if st.sidebar.button("🚀 EXECUTE FULL 500 AUDIT"):
     symbols, sectors = get_live_nifty_500()
     target_symbols = symbols[:scan_depth]
-    with st.spinner("Requesting Institutional Batch..."):
-        raw = yf.download(target_symbols, period="2y", group_by='column', auto_adjust=True, progress=False)
-        st.session_state['v164_res'] = process_batch_data(raw, target_symbols, sectors)
-
-if 'v164_res' in st.session_state:
-    df = st.session_state['v164_res']
+    all_final_data = []
     
-    # Breadth Heatmap
+    # CHUNKING LOGIC: Process 50 stocks at a time to bypass Yahoo rate limits
+    chunk_size = 50
+    chunks = [target_symbols[i:i + chunk_size] for i in range(0, len(target_symbols), chunk_size)]
+    
+    prog = st.progress(0, text="Initializing Institutional Data Bridge...")
+    for idx, chunk in enumerate(chunks):
+        prog.progress((idx + 1) / len(chunks), text=f"Downloading Batch {idx+1}/{len(chunks)}...")
+        try:
+            raw = yf.download(chunk, period="1y", group_by='column', auto_adjust=True, progress=False, threads=True)
+            batch_data = process_batch(raw, chunk, sectors)
+            all_final_data.extend(batch_data)
+            time.sleep(1) # Small pause to stay under the radar
+        except: continue
+        
+    if all_final_data:
+        st.session_state['v165_res'] = pd.DataFrame(all_final_data)
+
+if 'v165_res' in st.session_state:
+    df = st.session_state['v165_res']
+    
+    # Side Heatmap
     breadth = (len(df[df['MA 200'] < df['Price']]) / len(df)) * 100
     st.sidebar.subheader("🌡️ Market Heatmap")
     if breadth > 60: st.sidebar.success(f"🔥 BULLISH ({round(breadth,1)}%)")
@@ -99,34 +114,22 @@ if 'v164_res' in st.session_state:
     with tabs[0]:
         st.subheader("🎯 Miro Momentum Leaderboard")
         st.dataframe(df[["Ticker", "Price", "Recommendation", "Miro_Score", "Vol_Surge"]].sort_values("Miro_Score", ascending=False).style.map(highlight_reco, subset=['Recommendation']), hide_index=True, use_container_width=True)
-        with st.expander("📘 TACTICAL LOGIC"): st.write("Miro Logic: Combining 2x volume with 1%+ price delta to find institutional entry points.")
+        with st.expander("📘 TACTICAL LOGIC"): st.write("Miro Score (8-10): Institutional volume alignment with price action.")
 
     with tabs[1]:
         st.subheader("📈 Structural Trend Analysis")
         st.dataframe(df[["Ticker", "Price", "Recommendation", "MA 50", "MA 200"]].style.map(highlight_reco, subset=['Recommendation']), hide_index=True, use_container_width=True)
-        with st.expander("📘 TACTICAL LOGIC"): st.write("Look for Price > MA 50 > MA 200 for 'Golden Alignment'.")
 
-    with tabs[2]:
-        st.subheader("🪃 Mean Reversion (Statistical)")
-        st.dataframe(df[["Ticker", "Price", "Recommendation", "Z-Score"]].sort_values("Z-Score").style.map(highlight_reco, subset=['Recommendation']), hide_index=True, use_container_width=True)
-
-    with tabs[3]:
-        st.subheader("💎 Weekly Institutional Accumulation")
-        st.dataframe(df[["Ticker", "Price", "Recommendation", "Vol_Surge", "Sector"]].sort_values("Vol_Surge", ascending=False).style.map(highlight_reco, subset=['Recommendation']), hide_index=True, use_container_width=True)
-        with st.expander("📘 TACTICAL LOGIC"): st.write("High Vol Surge (>2.0) with low price movement indicates 'Whale Absorption'.")
-
-    with tabs[4]:
-        st.subheader("🧬 Linguistic Management Audit")
+    with tabs[4]: # FILING AUDIT
         t_f = st.selectbox("Select Asset", df['Ticker'].tolist(), key="f_box")
-        if st.button("🔍 Run Linguistic Audit"):
+        if st.button("🔍 Run Forensic Audit"):
             if client:
-                st.markdown(client.models.generate_content(model="gemini-2.5-flash", contents=f"Perform a forensic linguistic audit for {t_f} in 2026. Identify Sentiment Decay.").text)
+                st.markdown(client.models.generate_content(model="gemini-2.5-flash", contents=f"Audit {t_f} for Sentiment Decay in April 2026.").text)
 
-    with tabs[5]:
-        st.subheader("🧠 4-Agent Strategic Debate")
+    with tabs[5]: # INTELLIGENCE
         t_i = st.selectbox("Select Asset", df['Ticker'].tolist(), key="i_box")
         if st.button("⚖️ Summon Council"):
             if client:
-                st.markdown(client.models.generate_content(model="gemini-2.5-flash", contents=f"4-agent debate (Bull, Bear, Quant, Risk) for {t_i} on April 1, 2026.").text)
+                st.markdown(client.models.generate_content(model="gemini-2.5-flash", contents=f"4-agent debate for {t_i} on April 1, 2026.").text)
 else:
-    st.info("Scanner Ready. Execute Batch Scan to see 500 stocks.")
+    st.info("Scanner Ready. Execute Audit to see all 500 stocks.")
