@@ -1,7 +1,5 @@
-numpy
-pandas
 streamlit
-yfinance
-nsepython
+pandas
+numpy
+nselib
 google-genai
-requests
