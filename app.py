@@ -140,7 +140,7 @@ if 'v16_res' in st.session_state:
     
     with tabs[0]: # MIRO FLOW
         st.subheader("🎯 Miro Momentum Leaderboard")
-        st.dataframe(df[["Ticker", "Price", "Recommendation", "Miro_Score", "Vol_Surge"]].sort_values("Miro_Score", ascending=False).style.applymap(highlight_reco, subset=['Recommendation']), hide_index=True, use_container_width=True)
+       st.dataframe(df.style.map(highlight_reco, subset=['Recommendation']), hide_index=True, use_container_width=True)
         with st.expander("📘 TACTICAL LOGIC: Miro Flow"):
             st.markdown("""
             **Logic:** Detects 'Hot Money' entering a stock before the crowd.
