@@ -217,18 +217,230 @@ def fetch_market_pulse() -> dict:
 # =========================
 # 3. NIFTY 500 SYMBOLS
 # =========================
+# ── Nifty 500 hardcoded list (NSE CSV often blocks server-side requests) ──────
+# Source: NSE India as of 2025. Update periodically.
+_NIFTY500_SYMBOLS = [
+    # NIFTY 50
+    ("RELIANCE","Energy"),("TCS","IT"),("HDFCBANK","Financial Services"),
+    ("INFY","IT"),("ICICIBANK","Financial Services"),("BHARTIARTL","Telecom"),
+    ("KOTAKBANK","Financial Services"),("SBIN","Financial Services"),
+    ("HINDUNILVR","FMCG"),("AXISBANK","Financial Services"),
+    ("LT","Capital Goods"),("MARUTI","Automobile"),("HCLTECH","IT"),
+    ("BAJFINANCE","Financial Services"),("WIPRO","IT"),("TITAN","Consumer Durables"),
+    ("SUNPHARMA","Pharma"),("NTPC","Power"),("POWERGRID","Power"),
+    ("TATAMOTORS","Automobile"),("TATASTEEL","Metals"),("TECHM","IT"),
+    ("CIPLA","Pharma"),("DRREDDY","Pharma"),("APOLLOHOSP","Healthcare"),
+    ("BAJAJFINSV","Financial Services"),("JSWSTEEL","Metals"),("HINDALCO","Metals"),
+    ("NESTLEIND","FMCG"),("DIVISLAB","Pharma"),("EICHERMOT","Automobile"),
+    ("BPCL","Oil & Gas"),("COALINDIA","Oil & Gas"),("HEROMOTOCO","Automobile"),
+    ("BRITANNIA","FMCG"),("INDUSINDBK","Financial Services"),("TATACONSUM","FMCG"),
+    ("GRASIM","Cement"),("ASIANPAINT","Consumer Durables"),("ULTRACEMCO","Cement"),
+    ("ONGC","Oil & Gas"),("ITC","FMCG"),("LTIM","IT"),("ADANIENT","Industrials"),
+    ("ADANIPORTS","Services"),("TRENT","Retail"),("ZOMATO","Services"),
+    ("BAJAJ-AUTO","Automobile"),("SHRIRAMFIN","Financial Services"),("BEL","Capital Goods"),
+    # NIFTY NEXT 50 / MIDCAP
+    ("PIDILITIND","Chemicals"),("HAVELLS","Consumer Durables"),("SIEMENS","Capital Goods"),
+    ("ABB","Capital Goods"),("POLYCAB","Capital Goods"),("DLF","Realty"),
+    ("LODHA","Realty"),("GODREJCP","FMCG"),("MARICO","FMCG"),("VOLTAS","Consumer Durables"),
+    ("TORNTPHARM","Pharma"),("ALKEM","Pharma"),("HDFCLIFE","Financial Services"),
+    ("ICICIGI","Financial Services"),("360ONE","Financial Services"),
+    ("KAYNES","IT"),("DIXON","IT"),("PFC","Financial Services"),("RECLTD","Financial Services"),
+    ("IRFC","Financial Services"),("TATAPOWER","Power"),("BANKBARODA","Financial Services"),
+    ("LUPIN","Pharma"),("IPCALAB","Pharma"),("MUTHOOTFIN","Financial Services"),
+    ("CHOLAFIN","Financial Services"),("NAUKRI","Services"),("BOSCHLTD","Automobile"),
+    ("MOTHERSON","Automobile"),("BALKRISIND","Automobile"),("CEATLTD","Automobile"),
+    ("APOLLOTYRE","Automobile"),("MRF","Automobile"),("EXIDEIND","Automobile"),
+    ("ESCORTS","Automobile"),("TVSMOTORS","Automobile"),("AUROPHARMA","Pharma"),
+    ("BIOCON","Pharma"),("MANKIND","Pharma"),("LALPATHLAB","Healthcare"),
+    ("MAXHEALTH","Healthcare"),("FORTIS","Healthcare"),("MPHASIS","IT"),
+    ("PERSISTENT","IT"),("COFORGE","IT"),("LTTS","IT"),("OFSS","IT"),
+    ("TATAELXSI","IT"),("KPIT","IT"),("SBICARD","Financial Services"),
+    ("HDFCAMC","Financial Services"),("ANGELONE","Financial Services"),
+    ("CDSL","Financial Services"),("IDFCFIRSTB","Financial Services"),
+    ("BANDHANBNK","Financial Services"),("FEDERALBNK","Financial Services"),
+    ("RBLBANK","Financial Services"),("GODREJPROP","Realty"),("PRESTIGE","Realty"),
+    ("OBEROIRLTY","Realty"),("PHOENIXLTD","Realty"),("COLPAL","FMCG"),
+    ("DABUR","FMCG"),("EMAMILTD","FMCG"),("GAIL","Oil & Gas"),("IGL","Oil & Gas"),
+    ("PETRONET","Oil & Gas"),("HINDPETRO","Oil & Gas"),("IOC","Oil & Gas"),
+    ("HPCL","Oil & Gas"),("NMDC","Metals"),("VEDL","Metals"),("SAIL","Metals"),
+    ("NATIONALUM","Metals"),("HINDZINC","Metals"),("NHPC","Power"),("CESC","Power"),
+    ("TORNTPOWER","Power"),("ADANIGREEN","Power"),("JSWENERGY","Power"),
+    ("SUZLON","Capital Goods"),("HAL","Capital Goods"),("BHEL","Capital Goods"),
+    # NIFTY MIDCAP 150 / SMALLCAP
+    ("KALYANKJIL","Consumer Durables"),("TBOTEK","IT"),("MEDANTA","Healthcare"),
+    ("THELEELA","Services"),("AAVAS","Financial Services"),("HOMEFIRST","Financial Services"),
+    ("DCBBANK","Financial Services"),("MAHINDCIE","Automobile"),("SUNDRMFAST","Automobile"),
+    ("AARTIDRUGS","Pharma"),("GRANULES","Pharma"),("LAURUSLABS","Pharma"),
+    ("NATCOPHARM","Pharma"),("SEQUENT","Pharma"),("METROPOLIS","Healthcare"),
+    ("THYROCARE","Healthcare"),("RAINBOW","Healthcare"),("DEEPAKNI","Chemicals"),
+    ("TATACHEM","Chemicals"),("AARTI","Chemicals"),("GALAXYSURF","Chemicals"),
+    ("FINEORG","Chemicals"),("VINATI","Chemicals"),("NUVAMA","Financial Services"),
+    ("CAMS","Financial Services"),("KFINTECH","Financial Services"),
+    ("SPANDANA","Financial Services"),("CREDITACC","Financial Services"),
+    ("FIVESTAR","Financial Services"),("MANAPPURAM","Financial Services"),
+    ("SUNDARMFIN","Financial Services"),("HEROFINCO","Financial Services"),
+    ("INDIAMART","Services"),("JUSTDIAL","Services"),("TANLA","IT"),
+    ("RATEGAIN","IT"),("INTELLECT","IT"),("CYIENT","IT"),
+    ("NYKAA","Services"),("PVRINOX","Media"),("NAZARA","IT"),
+    ("SUNTV","Media"),("ZEEL","Media"),("BDL","Capital Goods"),
+    ("BEML","Capital Goods"),("GRSE","Capital Goods"),("MAZAGON","Capital Goods"),
+    ("DATAPATTNS","IT"),("KEC","Capital Goods"),("KALPATPOWR","Capital Goods"),
+    ("GMRINFRA","Services"),("JSWINFRA","Services"),("ATGL","Oil & Gas"),
+    ("CASTROLIND","Oil & Gas"),("MRPL","Oil & Gas"),("DELHIVERY","Services"),
+    ("PAYTM","Financial Services"),("POLICYBZR","Financial Services"),
+    ("WIPRO","IT"),("HCLTECH","IT"),("TECHM","IT"),("PERSISTENT","IT"),
+    # More Nifty 500 constituents
+    ("PIDILITIND","Chemicals"),("BERGEPAINT","Consumer Durables"),("KANSAINER","Consumer Durables"),
+    ("APLAPOLLO","Metals"),("RATNAMANI","Metals"),("WELCORP","Metals"),
+    ("JINDALSAW","Metals"),("JSWSTEEL","Metals"),("TATASTEELBSL","Metals"),
+    ("AMNPLST","Plastics"),("ASTRAL","Chemicals"),("SUPREMEIND","Plastics"),
+    ("RELAXO","Consumer Durables"),("BATAINDIA","Consumer Durables"),("PAGEIND","Textiles"),
+    ("RAYMOND","Textiles"),("ARVIND","Textiles"),("MANYAVAR","Retail"),
+    ("DMART","Retail"),("VMART","Retail"),("CAMPUS","Consumer Durables"),
+    ("WHIRLPOOL","Consumer Durables"),("BLUESTAR","Consumer Durables"),
+    ("CROMPTON","Consumer Durables"),("ORIENTELEC","Consumer Durables"),
+    ("BAJAJELEC","Consumer Durables"),("VBL","FMCG"),("VARUNBEV","FMCG"),
+    ("RADICO","FMCG"),("SULA","FMCG"),("GODFRYPHLP","FMCG"),
+    ("GILLETTE","FMCG"),("PGHH","FMCG"),("HONAUT","Capital Goods"),
+    ("CUMMINSIND","Capital Goods"),("THERMAX","Capital Goods"),("BHARAT FORGE","Capital Goods"),
+    ("SUNDRAMFAST","Automobile"),("SUPRAJIT","Automobile"),("GABRIEL","Automobile"),
+    ("WABCOINDIA","Automobile"),("TIINDIA","Automobile"),("CRAFTSMAN","Automobile"),
+    ("AAPL","IT"),("BIRLASOFT","IT"),("HEXAWARE","IT"),("MASTEK","IT"),
+    ("NIITTECH","IT"),("MPHASIS","IT"),("SONACOMS","Automobile"),
+    ("SWANENERGY","Power"),("RENUKA","FMCG"),("KPRMILL","Textiles"),
+    ("NITIN FIRE","Capital Goods"),("FINOLEX","Capital Goods"),("KEI","Capital Goods"),
+    ("HBLPOWER","Capital Goods"),("VOLTAMP","Capital Goods"),("TDPOWERSYS","Capital Goods"),
+    ("PRAJIND","Capital Goods"),("ELGIEQUIP","Capital Goods"),("GRINDWELL","Capital Goods"),
+    ("CARBORUNIV","Capital Goods"),("ASTEC","Chemicals"),("SUDARSCHEM","Chemicals"),
+    ("NAVINFLUOR","Chemicals"),("FLUOROCHEM","Chemicals"),("GUJFLUORO","Chemicals"),
+    ("CLEAN","Chemicals"),("NOCIL","Chemicals"),("BASF","Chemicals"),
+    ("AKZOINDIA","Chemicals"),("JYOTHYLAB","FMCG"),("BAJAJCON","FMCG"),
+    ("TATACHEMICALS","Chemicals"),("GHCL","Chemicals"),("ALKYLAMINE","Chemicals"),
+    ("GNFC","Chemicals"),("GSFC","Chemicals"),("CHAMBLFERT","Chemicals"),
+    ("COROMANDEL","Chemicals"),("PIIND","Chemicals"),("UPL","Chemicals"),
+    ("RALLIS","Chemicals"),("BAYER","Chemicals"),("DHANUKA","Chemicals"),
+    ("SHARDACROP","Chemicals"),("INSECTICIDES","Chemicals"),
+    ("JUBLFOOD","Services"),("DEVYANI","Services"),("SAPPHIRE","Services"),
+    ("WESTLIFE","Services"),("BARBEQUE","Services"),("EIHOTEL","Services"),
+    ("LEMON TREE","Services"),("CHALET","Services"),("MAHINDRA HOLI","Services"),
+    ("IRCTC","Services"),("RVNL","Capital Goods"),("IRCON","Capital Goods"),
+    ("RITES","Capital Goods"),("NBCC","Realty"),("NCC","Capital Goods"),
+    ("HCC","Capital Goods"),("PNC INFRA","Capital Goods"),("HGINFRA","Capital Goods"),
+    ("ITD CEMENT","Capital Goods"),("GPPL","Services"),("CONCOR","Services"),
+    ("BLUEDART","Services"),("MAHLOG","Services"),("AEGIS","Oil & Gas"),
+    ("GUJGAS","Oil & Gas"),("MGL","Oil & Gas"),("GSPL","Oil & Gas"),
+    ("INDRAPRASTHA","Oil & Gas"),("HUDCO","Financial Services"),("IREDA","Financial Services"),
+    ("REC","Financial Services"),("NABARD","Financial Services"),
+    ("UJJIVAN","Financial Services"),("EQUITASBNK","Financial Services"),
+    ("SURYODAY","Financial Services"),("ESAFSFB","Financial Services"),
+    ("UTKARSH","Financial Services"),("CAPF","Financial Services"),
+    ("APTUS","Financial Services"),("INDOSTAR","Financial Services"),
+    ("CHOLAHLDNG","Financial Services"),("M&MFIN","Financial Services"),
+    ("BAJAJHFL","Financial Services"),("LICHSGFIN","Financial Services"),
+    ("PNBHOUSING","Financial Services"),("CANFINHOME","Financial Services"),
+    ("AADHARHFC","Financial Services"),("REPCO","Financial Services"),
+    ("INDIABULL","Financial Services"),("HOMEFIRST","Financial Services"),
+    ("APTUS","Financial Services"),("UGROCAP","Financial Services"),
+    ("LXCHEM","Chemicals"),("ANURAS","Healthcare"),("MEDPLUS","Retail"),
+    ("GLOBUSSPR","Retail"),("SENCO","Consumer Durables"),("DOMS","Consumer Durables"),
+    ("KAYNES","IT"),("AVALON","IT"),("SYRMA","IT"),("IDEAFORGE","IT"),
+    ("SERVOTECH","Capital Goods"),("WAAREE","Capital Goods"),("PREMIER","Capital Goods"),
+    ("INOXWIND","Capital Goods"),
+    ("SJVN","Power"),("GIPCL","Power"),
+    # Additional Nifty 500 symbols
+    ("ZYDUSLIFE","Pharma"),("GLAXO","Pharma"),("PFIZER","Pharma"),("ABBOTINDIA","Pharma"),
+    ("SANOFI","Pharma"),("JBCHEPHARM","Pharma"),("AJANTPHARM","Pharma"),
+    ("SOLARA","Pharma"),("SUVEN","Pharma"),("GLAND","Pharma"),("DRREDDYS","Pharma"),
+    ("SUNPHARMA","Pharma"),("CIPLA","Pharma"),("LUPIN","Pharma"),
+    ("BANKBARODA","Financial Services"),("PNB","Financial Services"),
+    ("CANBK","Financial Services"),("UCOBANK","Financial Services"),
+    ("CENTRALBK","Financial Services"),("IOB","Financial Services"),
+    ("BANKINDIA","Financial Services"),("MAHABANK","Financial Services"),
+    ("UNIONBANK","Financial Services"),("INDIANB","Financial Services"),
+    ("IDBI","Financial Services"),("YESBANK","Financial Services"),
+    ("KARURVYSYA","Financial Services"),("CUB","Financial Services"),
+    ("TMB","Financial Services"),("DHANBANK","Financial Services"),
+    ("SOUTHBANK","Financial Services"),("LAKSHVILAS","Financial Services"),
+    ("J&KBANK","Financial Services"),("NAINITAL","Financial Services"),
+    ("TATVA","Chemicals"),("LXCHEM","Chemicals"),("GOKEX","Chemicals"),
+    ("TITAGARH","Capital Goods"),("TEXRAIL","Capital Goods"),
+    ("MEDPLUSHEALTH","Retail"),("SHOPERSTOP","Retail"),("TRENT","Retail"),
+    ("VEDANT","Retail"),("CARTRADE","Services"),("EASEMYTRIP","Services"),
+    ("IXIGO","Services"),("YATHARTH","Healthcare"),("VIJAYABANK","Financial Services"),
+    ("SJVNLTD","Power"),("NHPCLTD","Power"),("NTPCLTD","Power"),
+    ("POWERINDIA","Capital Goods"),("AGARWALEYE","Healthcare"),
+    ("KRSNAA","Healthcare"),("HEALTHIUM","Healthcare"),("SUDARSHAN","Chemicals"),
+    ("ROSSARI","Chemicals"),("NEWGEN","IT"),("TARSONS","Healthcare"),
+    ("LATENTVIEW","IT"),("ROUTE","IT"),("HAPPYFORGE","Metals"),
+    ("CRAFTSMAN","Automobile"),("ENDURANCE","Automobile"),("MINDA","Automobile"),
+    ("SANDHAR","Automobile"),("LUMAX","Automobile"),("SUBROS","Automobile"),
+    ("JAMNA","Automobile"),("SHYAMMETL","Metals"),("GPIL","Metals"),
+    ("GMRAIRPORT","Services"),("ADANIAIRPORT","Services"),
+    ("NSLNISP","Metals"),("JINDALSTL","Metals"),("JSPL","Metals"),
+    ("MSTC","Services"),("MMTC","Services"),("SCI","Services"),
+    ("GRINDWELL","Capital Goods"),("TIMKEN","Capital Goods"),
+    ("SKF","Capital Goods"),("SCHAEFFLER","Capital Goods"),("FAG","Capital Goods"),
+    ("ASTRAL","Chemicals"),("FINOLEX","Capital Goods"),("KPITTECH","IT"),
+    ("MASTEK","IT"),("HEXAWARE","IT"),("MPHASIS","IT"),
+    ("SONACOMS","Automobile"),("SANSERA","Automobile"),("SUPRAJIT","Automobile"),
+    ("RAMCOCEM","Cement"),("JKCEMENT","Cement"),("BIRLACORPN","Cement"),
+    ("HEIDELBERG","Cement"),("PRISM","Cement"),("NUVOCO","Cement"),
+    ("INDIACEM","Cement"),("DALMIA","Cement"),("JKLAKMSHMI","Cement"),
+    ("MANGCEMNT","Cement"),("KAJARIACER","Consumer Durables"),
+    ("CERA","Consumer Durables"),("SOMANY","Consumer Durables"),
+    ("ORIENTBELL","Consumer Durables"),("GRSE","Capital Goods"),
+    ("COCHINSHIP","Capital Goods"),("DREDGECORP","Capital Goods"),
+    ("MIDHANI","Metals"),("MOIL","Metals"),("KIOCL","Metals"),
+    ("GMRINFRA","Services"),("IRB","Services"),("SADBHAV","Services"),
+    ("ASHOKA","Services"),("KNR","Capital Goods"),("AHLUCONT","Capital Goods"),
+    ("PSPPROJECT","Capital Goods"),("VGUARD","Consumer Durables"),
+    ("ORIENTELEC","Consumer Durables"),("FINOLEX CABL","Capital Goods"),
+    ("POLYCAB","Capital Goods"),("HAVELLS","Consumer Durables"),
+    ("LEGRAND","Consumer Durables"),("HITACHIENER","Consumer Durables"),
+]
+
+# Deduplicate preserving order
+_seen = set()
+_NIFTY500_CLEAN = []
+for sym, sec in _NIFTY500_SYMBOLS:
+    sym_clean = sym.replace(" ","").upper()
+    if sym_clean not in _seen and sym_clean.isalpha() or "-" in sym_clean or sym_clean.replace("-","").isalpha():
+        # Only keep valid NSE symbols (alpha + hyphen, no spaces)
+        s = sym.strip().replace(" ","")
+        if s not in _seen and all(c.isalpha() or c in "-&" for c in s):
+            _seen.add(s)
+            _NIFTY500_CLEAN.append((s, sec))
+
+
 @st.cache_data(ttl=86400)
 def get_nifty500_list():
+    """Get Nifty 500 symbol list.
+    Tries NSE CSV first; falls back to hardcoded list of ~500 stocks.
+    """
     try:
-        n500 = pd.read_csv(NIFTY500_CSV_URL)
-        n500["Symbol"] = n500["Symbol"].astype(str).str.upper().str.strip()
-        n500["Industry"] = n500["Industry"].astype(str).fillna("Misc")
-        sector_map = dict(zip(n500["Symbol"], n500["Industry"]))
-        return n500["Symbol"].tolist(), sector_map
+        resp = requests.get(
+            NIFTY500_CSV_URL,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Referer": "https://www.nseindia.com",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            },
+            timeout=15
+        )
+        if resp.status_code == 200 and "Symbol" in resp.text:
+            from io import StringIO
+            n500 = pd.read_csv(StringIO(resp.text))
+            n500["Symbol"] = n500["Symbol"].astype(str).str.upper().str.strip()
+            n500["Industry"] = n500["Industry"].astype(str).fillna("Misc")
+            if len(n500) > 50:  # sanity check
+                sector_map = dict(zip(n500["Symbol"], n500["Industry"]))
+                return n500["Symbol"].tolist(), sector_map
     except Exception:
-        fallback = ["RELIANCE","TCS","HDFCBANK","INFY","ICICIBANK","BHARTIARTL",
-                    "SBIN","KOTAKBANK","HINDUNILVR","AXISBANK","LT","MARUTI"]
-        return fallback, {s: "Misc" for s in fallback}
+        pass
+    # Fallback: use hardcoded list
+    symbols   = [s for s, _ in _NIFTY500_CLEAN]
+    sector_map = {s: sec for s, sec in _NIFTY500_CLEAN}
+    return symbols, sector_map
 
 # =========================
 # 4. METRIC ENGINE
