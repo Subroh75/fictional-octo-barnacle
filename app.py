@@ -8,11 +8,10 @@ import io
 from google import genai
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Nifty Sniper v26.0 | GID Bridge", layout="wide")
+st.set_page_config(page_title="Nifty Sniper v27.0 | Arrow-Hunter", layout="wide")
 
-# YOUR MASTER KEYS
 SHEET_ID = "1SX9P19bzXWNypttEnfil195B8H63tjAZIBfK8PW2q9Y"
-GID = "1600033224"  # <--- YOUR TAB ID IS USED HERE
+GID = "1600033224" 
 
 def get_ai_client():
     try:
@@ -30,65 +29,84 @@ def highlight_reco(val):
     if 'strong sell' in v: return 'background-color: #e74c3c; color: white; font-weight: bold'
     return 'background-color: #f1c40f; color: black'
 
-# --- 2. DATA BRIDGE (THE GID USAGE) ---
+# --- 2. DATA BRIDGE (THE ARROW-HUNTER) ---
 @st.cache_data(ttl=300)
-def fetch_from_gid():
-    # THE GID IS USED IN THIS URL STRING TO FETCH THE SPECIFIC TAB
-    export_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={GID}"
+def fetch_from_bridge():
+    url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={GID}"
     
     try:
-        response = requests.get(export_url, headers={'User-Agent': 'Mozilla/5.0'})
-        # skiprows=6 targets the headers in Row 7 (STOCK, PRICE, etc.)
+        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
+        # skiprows=6 aligns the headers correctly for SMA_Screener_v1.0
         df = pd.read_csv(io.StringIO(response.text), skiprows=6)
         
         # Cleanup: Remove spaces from column names
         df.columns = [str(c).strip() for c in df.columns]
         
+        # ARROW-HUNTER LOGIC: 
+        # Column 'CHANGE %' is the arrow. The NEXT column is the actual percentage number.
+        if 'CHANGE %' in df.columns:
+            arrow_idx = list(df.columns).index('CHANGE %')
+            # Column 4 in your sheet (unnamed) contains the actual numeric data
+            num_chg_col = df.columns[arrow_idx + 1] 
+            df['Real_Change'] = pd.to_numeric(df[num_chg_col], errors='coerce')
+        
         # Miro Score Calculation
         df['Miro_Score'] = 0
-        if 'CHANGE %' in df.columns:
-            # Your sheet has arrows in 'CHANGE %' and numbers in the next column
-            change_num_col = df.columns[list(df.columns).index('CHANGE %') + 1]
-            df['Num_Change'] = pd.to_numeric(df[change_num_col], errors='coerce')
-            df['Miro_Score'] += df['Num_Change'].apply(lambda x: 5 if x > 1.5 else 0)
+        if 'Real_Change' in df.columns:
+            df['Miro_Score'] += df['Real_Change'].apply(lambda x: 5 if x > 1.5 else 0)
         
+        # Add score if SMA Rating is bullish
+        if 'SMA Rating' in df.columns:
+            df.loc[df['SMA Rating'].str.contains('Buy', na=False), 'Miro_Score'] += 3
+            
         return df
     except Exception as e:
         st.error(f"Sync Error: {e}")
         return pd.DataFrame()
 
-# --- 3. THE COMMAND CENTER ---
-st.sidebar.title("🏹 Nifty Sniper v26.0")
+# --- 3. INTERFACE ---
+st.sidebar.title("🏹 Nifty Sniper v27.0")
 
-if st.sidebar.button("🚀 SYNC TAB: 1600033224"):
-    data = fetch_from_gid()
+if st.sidebar.button("🚀 SYNC FROM GOOGLE BRIDGE"):
+    data = fetch_from_bridge()
     if not data.empty:
-        st.session_state['miro_v26'] = data
-        st.sidebar.success("Tab Synced Successfully!")
+        st.session_state['miro_v27'] = data
+        st.sidebar.success("Institutional Data Synced.")
 
-if 'miro_v26' in st.session_state:
-    df = st.session_state['miro_v26']
+if 'miro_v27' in st.session_state:
+    df = st.session_state['miro_v27']
+    
+    # Cleaning Ticker Names (Removing NSE: or NASDAQ: prefix for clarity)
+    df['Clean_Ticker'] = df['STOCK'].str.split(':').str[-1]
     
     t1, t2 = st.tabs(["🎯 Miro Flow", "🧠 Intelligence Lab"])
     
     with t1:
-        # Display Core Columns
-        display_cols = [c for c in ['STOCK', 'PRICE', 'CHANGE %', 'SMA Rating', 'Miro_Score'] if c in df.columns]
+        st.subheader("🎯 Miro Momentum Leaderboard")
+        # Final display mapping
+        display_map = {
+            'Clean_Ticker': 'Ticker',
+            'PRICE': 'Price',
+            'CHANGE %': 'Dir',
+            'Real_Change': 'Chg %',
+            'SMA Rating': 'SMA Rating',
+            'Miro_Score': 'Miro'
+        }
         
-        if 'SMA Rating' in df.columns:
-            st.dataframe(
-                df[display_cols].sort_values("Miro_Score", ascending=False).style.map(highlight_reco, subset=['SMA Rating']),
-                use_container_width=True, hide_index=True
-            )
-        else:
-            st.dataframe(df[display_cols].sort_values("Miro_Score", ascending=False), use_container_width=True)
+        cols = [c for c in display_map.keys() if c in df.columns]
+        final_df = df[cols].rename(columns=display_map)
+        
+        st.dataframe(
+            final_df.sort_values("Miro", ascending=False).style.map(highlight_reco, subset=['SMA Rating']),
+            use_container_width=True, hide_index=True
+        )
 
     with t2:
-        ticker = st.selectbox("Select Ticker", df['STOCK'].tolist() if 'STOCK' in df.columns else [])
-        if st.button("⚖️ Summon Council") and ticker:
+        ticker = st.selectbox("Select Ticker", df['Clean_Ticker'].tolist() if 'Clean_Ticker' in df.columns else [])
+        if st.button("⚖️ Summon Council"):
             if client:
-                rating = df[df['STOCK']==ticker]['SMA Rating'].values[0] if 'SMA Rating' in df.columns else "N/A"
-                prompt = f"Perform a strategic 4-agent debate for {ticker}. SMA Rating: {rating}."
+                rating = df[df['Clean_Ticker']==ticker]['SMA Rating'].values[0]
+                prompt = f"Perform a 4-agent strategic debate for {ticker}. SMA Rating: {rating}. Context: April 2026 Market."
                 st.markdown(client.models.generate_content(model="gemini-2.5-flash", contents=prompt).text)
 else:
-    st.info("System Ready. Click the sidebar button to pull data from GID 1600033224.")
+    st.info("Bridge Ready. Click the sidebar button to pull data from your SMA Screener.")
