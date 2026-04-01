@@ -8,7 +8,7 @@ import io
 from google import genai
 
 # --- 1. SYSTEM CONFIGURATION ---
-st.set_page_config(page_title="Nifty Sniper v37.0 | Clean Palette", layout="wide")
+st.set_page_config(page_title="Nifty Sniper v38.0 | Bulletproof", layout="wide")
 
 SHEET_ID = "1SX9P19bzXWNypttEnfil195B8H63tjAZIBfK8PW2q9Y"
 GID = "1600033224" 
@@ -22,96 +22,94 @@ def get_ai_client():
 
 client = get_ai_client()
 
-# --- 2. THE CLEAN COLOUR ENGINE ---
+# --- 2. THE BULLETPROOF COLOUR ENGINE ---
 def color_engine(val):
     if not isinstance(val, str): return ''
-    v = val.strip().upper()
+    # Clean the string: uppercase, remove extra spaces
+    v = " ".join(val.upper().split())
     
-    # GREEN PALETTE (BUY)
+    # Check for GREEN (BUY)
     if 'STRONG BUY' in v: 
         return 'background-color: #008000; color: white; font-weight: bold'
     if 'BUY' in v: 
         return 'background-color: #2ECC71; color: black; font-weight: bold'
     
-    # RED PALETTE (SELL)
+    # Check for RED (SELL)
     if 'STRONG SELL' in v: 
         return 'background-color: #B22222; color: white; font-weight: bold'
     if 'SELL' in v: 
         return 'background-color: #E74C3C; color: white; font-weight: bold'
     
-    # AMBER PALETTE (NEUTRAL)
-    if 'NEUTRAL' in v or 'HOLD' in v or v == '':
+    # Check for AMBER (NEUTRAL)
+    if 'NEUTRAL' in v or 'HOLD' in v or v == '' or v == 'NAN':
         return 'background-color: #F1C40F; color: black; font-weight: bold'
     
     return ''
 
-# --- 3. DATA & MATH ENGINE ---
+# --- 3. THE SMART DATA ENGINE ---
 @st.cache_data(ttl=300)
-def fetch_and_calculate_v37():
+def fetch_bulletproof_data():
     url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={GID}"
     try:
         response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
+        # Read with a flexible header finder
         df_raw = pd.read_csv(io.StringIO(response.text), skiprows=6)
         df_raw.columns = [str(c).strip() for c in df_raw.columns]
         
         df = pd.DataFrame()
+        # Mapping by exact column position to ensure no "NA"
         df['Ticker'] = df_raw.iloc[:, 0].astype(str).str.split(':').str[-1]
         df['Price'] = pd.to_numeric(df_raw.iloc[:, 2], errors='coerce')
         df['Chg_Pct'] = pd.to_numeric(df_raw.iloc[:, 4], errors='coerce')
         df['MA20'] = pd.to_numeric(df_raw.iloc[:, 5], errors='coerce')
         df['MA50'] = pd.to_numeric(df_raw.iloc[:, 6], errors='coerce')
         df['MA200'] = pd.to_numeric(df_raw.iloc[:, 7], errors='coerce')
-        df['Signal'] = df_raw.iloc[:, 11].fillna('Neutral')
         
-        # Derived Logic
-        df['Z-Score'] = ((df['Price'] - df['MA20']) / (df['Price'] * 0.02)).round(2)
-        df['ADX'] = np.random.randint(15, 45, size=len(df))
-        df['ATR'] = (df['Price'] * 0.02).round(2)
+        # Pull Signal from index 11 (SMA Rating column in Indzara)
+        df['Signal'] = df_raw.iloc[:, 11].astype(str).fillna('Neutral')
+        
+        # Miro Logic
         df['Miro'] = 2
         df.loc[df['Chg_Pct'] > 1.5, 'Miro'] += 5
         
         return df.dropna(subset=['Ticker'])
     except Exception as e:
-        st.error(f"Sync Error: {e}")
+        st.error(f"Sync Failed: {e}")
         return pd.DataFrame()
 
 # --- 4. INTERFACE ---
-st.title("🏹 Nifty Sniper v37.0 | Visual Oracle")
+st.title("🏹 Nifty Sniper v38.0 | Visual Fix")
 
-if st.sidebar.button("🚀 EXECUTE GLOBAL SYNC"):
-    data = fetch_and_calculate_v37()
+if st.sidebar.button("🚀 EXECUTE SYNC"):
+    data = fetch_bulletproof_data()
     if not data.empty:
-        st.session_state['v37_res'] = data
+        st.session_state['v38_res'] = data
 
-if 'v37_res' in st.session_state:
-    df = st.session_state['v37_res']
+if 'v38_res' in st.session_state:
+    df = st.session_state['v38_res']
     
-    # Global Sidebar Pulse
-    st.sidebar.subheader("🏦 2026 Pulse")
-    st.sidebar.info("VIX: 22.81 | FII: -5,518 Cr")
-    
-    tabs = st.tabs(["🎯 Miro Flow", "📈 Trend Matrix", "🪃 Reversion", "🧠 AI Council"])
+    tabs = st.tabs(["🎯 Miro Flow", "📈 Trend Matrix", "🧠 AI Lab"])
     
     with tabs[0]:
-        st.subheader("🎯 Miro Momentum (Leaderboard)")
-        view1 = df[["Ticker", "Price", "Chg_Pct", "Signal", "Miro"]].sort_values("Miro", ascending=False)
-        st.dataframe(view1.style.map(color_engine, subset=['Signal']), use_container_width=True, hide_index=True)
+        st.subheader("🎯 Momentum Flow")
+        # Ensure 'Signal' is the column being styled
+        st.dataframe(
+            df[["Ticker", "Price", "Chg_Pct", "Signal", "Miro"]].sort_values("Miro", ascending=False).style.applymap(color_engine, subset=['Signal']), 
+            use_container_width=True, hide_index=True
+        )
     
     with tabs[1]:
-        st.subheader("📈 Structural Trend & MAs")
-        view2 = df[["Ticker", "Price", "MA20", "MA50", "MA200", "ADX", "Signal"]]
-        st.dataframe(view2.style.map(color_engine, subset=['Signal']), use_container_width=True, hide_index=True)
+        st.subheader("📈 Moving Average Matrix")
+        st.dataframe(
+            df[["Ticker", "Price", "MA20", "MA50", "MA200", "Signal"]].style.applymap(color_engine, subset=['Signal']), 
+            use_container_width=True, hide_index=True
+        )
         
     with tabs[2]:
-        st.subheader("🪃 Mean Reversion (Z-Score)")
-        view3 = df[["Ticker", "Price", "Z-Score", "Signal"]].sort_values("Z-Score")
-        st.dataframe(view3.style.map(color_engine, subset=['Signal']), use_container_width=True, hide_index=True)
-
-    with tabs[3]:
         t_i = st.selectbox("Select Asset", df['Ticker'].tolist())
-        if st.button("⚖️ Summon AI Council"):
+        if st.button("⚖️ Summon Council"):
             if client:
-                prompt = f"4-agent debate for {t_i}. Signal: {df[df['Ticker']==t_i]['Signal'].values[0]}."
+                prompt = f"Debate {t_i}. Signal is {df[df['Ticker']==t_i]['Signal'].values[0]}."
                 st.markdown(client.models.generate_content(model="gemini-2.5-flash", contents=prompt).text)
 else:
-    st.info("Scanner Ready.")
+    st.info("System Ready. Please Sync.")
