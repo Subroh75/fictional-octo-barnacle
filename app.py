@@ -14,6 +14,12 @@ try:
     BREEZE_AVAILABLE = True
 except ImportError:
     BREEZE_AVAILABLE = False
+
+try:
+    from truedata_ws.websocket.TD import TD as TrueDataWS
+    TRUEDATA_AVAILABLE = True
+except ImportError:
+    TRUEDATA_AVAILABLE = False
 from anthropic import Anthropic
 
 # =========================
@@ -64,6 +70,54 @@ def get_breeze_client():
 # =========================
 # 2. YAHOO FINANCE — DIRECT HTTP (no npm, no bridge)
 # =========================
+@st.cache_resource
+def get_truedata_client():
+    if not TRUEDATA_AVAILABLE:
+        return None
+    try:
+        user = st.secrets.get("TRUEDATA_USER","").strip()
+        pwd  = st.secrets.get("TRUEDATA_PASSWORD","").strip()
+        if not user or not pwd:
+            return None
+        return TrueDataWS(user, pwd, live_port=8082, url='push.truedata.in', log_level='ERROR')
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_candles_truedata(symbol: str) -> pd.DataFrame:
+    td = get_truedata_client()
+    if td is None:
+        return pd.DataFrame()
+    try:
+        hist = td.get_historic_data(symbol + '-EQ', bar_size='EOD', no_of_bars=200)
+        if hist is None or (hasattr(hist,'empty') and hist.empty):
+            return pd.DataFrame()
+        df = hist.copy()
+        df.columns = [str(col).strip() for col in df.columns]
+        m = {}
+        for col in df.columns:
+            cl = col.lower()
+            if 'time' in cl or 'date' in cl: m[col]='date'
+            elif cl=='open':   m[col]='Open'
+            elif cl=='high':   m[col]='High'
+            elif cl=='low':    m[col]='Low'
+            elif cl=='close':  m[col]='Close'
+            elif cl=='volume': m[col]='Volume'
+        df = df.rename(columns=m)
+        if 'date' not in df.columns or 'Close' not in df.columns:
+            return pd.DataFrame()
+        df['date']  = pd.to_datetime(df['date'], errors='coerce')
+        df['Close'] = pd.to_numeric(df['Close'], errors='coerce')
+        for col in ['Open','High','Low']:
+            df[col] = pd.to_numeric(df.get(col, df['Close']), errors='coerce')
+        df['Volume'] = pd.to_numeric(df.get('Volume',0), errors='coerce').fillna(0)
+        df = df.dropna(subset=['Close','date']).sort_values('date').reset_index(drop=True)
+        return df[['date','Open','High','Low','Close','Volume']]
+    except Exception:
+        return pd.DataFrame()
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_candles_breeze(symbol: str) -> pd.DataFrame:
     """Fetch 2y daily OHLCV from ICICI Breeze API (official NSE data).
@@ -163,11 +217,14 @@ def fetch_holdings_breeze() -> pd.DataFrame:
 
 
 def fetch_candles_smart(symbol: str) -> pd.DataFrame:
-    """Try Breeze first, fall back to Yahoo Finance automatically."""
+    """3-tier: TrueData -> Breeze -> Yahoo Finance. Cached 1hr."""
+    df = fetch_candles_truedata(symbol)
+    if not df.empty and len(df) >= 20:
+        return df
     df = fetch_candles_breeze(symbol)
-    if df.empty:
-        df = fetch_candles_yf(symbol + ".NS")
-    return df
+    if not df.empty and len(df) >= 20:
+        return df
+    return fetch_candles_yf(symbol + ".NS")
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -882,11 +939,14 @@ with st.sidebar:
     }
     st.info(guides.get(strategy_key, ""))
     st.markdown("---")
-    breeze_ok = get_breeze_client() is not None
-    if breeze_ok:
-        st.success("🟢 Breeze API connected — live NSE data")
+    td_ok     = get_truedata_client() is not None
+    breeze_ok = (not td_ok) and (get_breeze_client() is not None)
+    if td_ok:
+        st.success("🟢 TrueData — official NSE vendor")
+    elif breeze_ok:
+        st.info("🔵 Breeze API — live NSE data")
     else:
-        st.warning("🟡 Yahoo Finance mode — add Breeze secrets for live NSE data")
+        st.warning("🟡 Yahoo Finance mode")
     st.markdown("---")
     st.markdown("<small>⚠️ Not SEBI registered · Not buy/sell advice</small>", unsafe_allow_html=True)
 
@@ -903,8 +963,9 @@ if clear_cache:
 if run_scan:
     symbols_list, sector_map = get_nifty500_list()
     symbols_list = symbols_list[:scan_limit]
-    breeze_active = get_breeze_client() is not None
-    data_source_msg = "🟢 Fetching live NSE data from Breeze (ICICI Direct)..." if breeze_active else "🟡 Fetching NSE data from Yahoo Finance..."
+    truedata_active = get_truedata_client() is not None
+    breeze_active   = (not truedata_active) and (get_breeze_client() is not None)
+    data_source_msg = ("🟢 TrueData — official NSE..." if truedata_active else "🔵 Breeze — live NSE..." if breeze_active else "🟡 Yahoo Finance...")
     with st.spinner(data_source_msg):
         result_df = run_master_scan(tuple(symbols_list), sector_map)
     if not result_df.empty:
